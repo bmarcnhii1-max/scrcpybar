@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ScrcpyBar Companion</string>
+
+    <!-- Server card -->
+    <string name="card_server">HTTP bridge</string>
+    <string name="default_port" translatable="false">38080</string>
+    <string name="status_running">running</string>
+    <string name="status_stopped">stopped</string>
+    <string name="hint_port">Port</string>
+    <string name="action_save_port">Save</string>
+    <string name="action_start_server">Start</string>
+    <string name="action_stop_server">Stop</string>
+    <string name="label_require_token">Require bearer token</string>
+    <string name="endpoint_summary">PC API: %1$s\nPhone API (USB forward): 127.0.0.1:%2$d → 127.0.0.1:%3$d</string>
+    <string name="error_no_network">USB mode: the desktop must run adb forward tcp:39282 tcp:38080</string>
+    <string name="error_invalid_port">Port must be between 1024 and 65535</string>
+
+    <!-- Access card -->
+    <string name="card_access">Access</string>
+    <string name="listener_granted">Notification access: granted</string>
+    <string name="listener_denied">Notification access: not granted</string>
+    <string name="notification_access_explainer">Android only exposes active MediaSession objects to apps that hold notification listener access. No root, accessibility service or UI automation is used.</string>
+    <string name="action_grant_notification_access">Grant notification access</string>
+    <string name="action_open_notification_settings">Open notification settings</string>
+    <string name="action_allow_notifications">Allow notifications</string>
+
+    <!-- Token card -->
+    <string name="card_token">Access token</string>
+    <string name="token_disabled">Disabled</string>
+    <string name="action_copy">Copy</string>
+    <string name="action_regenerate">Regenerate</string>
+
+    <!-- Now playing card -->
+    <string name="card_now_playing">Now playing</string>
+    <string name="now_playing_empty">No active media session. Start playback in any app.</string>
+    <string name="now_playing_format">%1$s\n%2$s\n%3$s (%4$s)\n%5$s / %6$s · %7$s</string>
+    <string name="unknown_title">Unknown title</string>
+    <string name="unknown_artist">Unknown artist</string>
+    <string name="action_previous">Prev</string>
+    <string name="action_play">Play</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_next">Next</string>
+
+    <!-- API card -->
+    <string name="card_api">API reference</string>
+    <string name="api_reference">v%1$s · api v%2$s\n\nGET  /health\nGET  /state\nPOST /control\n{\"action\":\"seek\",\"positionMs\":60000}\nGET  /sessions\nGET  /artwork\n\nHeader: Authorization: Bearer &lt;token&gt;</string>
+
+    <!-- Toasts -->
+    <string name="toast_port_saved">Port set to %1$d, server restarted</string>
+    <string name="toast_server_started">Server starting…</string>
+    <string name="toast_server_stopped">Server stopped</string>
+    <string name="toast_token_copied">Token copied</string>
+    <string name="toast_token_regenerated">New token generated, update the bridge</string>
+    <string name="toast_no_settings_screen">This device does not expose that settings screen</string>
+
+    <!-- Notification access screen -->
+    <string name="notification_access_title">Notification access</string>
+    <string name="notification_listener_label">ScrcpyBar media listener</string>
+    <string name="listener_granted_banner">Notification access is granted</string>
+    <string name="listener_denied_banner">Notification access is not granted</string>
+    <string name="notification_access_why">The companion app reads playback state through MediaSessionManager. Android only grants access to the list of active sessions to apps the user has enabled here. The app is read-only for everything except the standard MediaController play/pause/skip/seek calls.</string>
+    <string name="notification_access_how_title">How to grant it</string>
+    <string name="notification_access_steps">1. Tap “Open notification settings”.\n2. Find “ScrcpyBar media listener”.\n3. Turn it on and confirm.\n4. Come back here and press “Refresh”.</string>
+    <string name="action_open_app_notification_settings">App notification settings</string>
+    <string name="action_refresh">Refresh status</string>
+
+    <!-- Service notification -->
+    <string name="notification_channel_name">ScrcpyBar bridge</string>
+    <string name="notification_channel_description">Keeps the local HTTP media-control API available to the desktop bridge.</string>
+    <string name="notification_title">ScrcpyBar bridge running</string>
+    <string name="notification_text_fallback">Waiting for a network connection</string>
+    <string name="notification_big_text">Bridge: %1$s:%2$d\nTap to open, use Stop to shut the server down.</string>
+</resources>

@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ScrcpyBar Companion</string>
+
+    <!-- Server card -->
+    <string name="card_server">HTTP-мост</string>
+    <string name="status_running">работает</string>
+    <string name="status_stopped">остановлен</string>
+    <string name="hint_port">Порт</string>
+    <string name="action_save_port">Сохранить</string>
+    <string name="action_start_server">Запустить</string>
+    <string name="action_stop_server">Остановить</string>
+    <string name="label_require_token">Требовать bearer-токен</string>
+    <string name="endpoint_summary">API для ПК: %1$s\nAPI телефона (через USB): 127.0.0.1:%2$d → 127.0.0.1:%3$d</string>
+    <string name="error_no_network">В режиме USB десктоп должен выполнить adb forward tcp:39282 tcp:38080</string>
+    <string name="error_invalid_port">Порт должен быть от 1024 до 65535</string>
+
+    <!-- Access card -->
+    <string name="card_access">Доступ</string>
+    <string name="listener_granted">Доступ к уведомлениям: выдан</string>
+    <string name="listener_denied">Доступ к уведомлениям: не выдан</string>
+    <string name="notification_access_explainer">Android открывает список активных MediaSession только приложениям с доступом к уведомлениям. Root, AccessibilityService и UI-автоматизация не используются.</string>
+    <string name="action_grant_notification_access">Выдать доступ к уведомлениям</string>
+    <string name="action_open_notification_settings">Открыть настройки уведомлений</string>
+    <string name="action_allow_notifications">Разрешить уведомления</string>
+
+    <!-- Token card -->
+    <string name="card_token">Токен доступа</string>
+    <string name="token_disabled">Отключено</string>
+    <string name="action_copy">Копировать</string>
+    <string name="action_regenerate">Сгенерировать заново</string>
+
+    <!-- Now playing card -->
+    <string name="card_now_playing">Сейчас играет</string>
+    <string name="now_playing_empty">Активных сессий нет. Запустите воспроизведение в любом приложении.</string>
+    <string name="now_playing_format">%1$s\n%2$s\n%3$s (%4$s)\n%5$s / %6$s · %7$s</string>
+    <string name="unknown_title">Без названия</string>
+    <string name="unknown_artist">Без исполнителя</string>
+    <string name="action_previous">Пред.</string>
+    <string name="action_play">Играть</string>
+    <string name="action_pause">Пауза</string>
+    <string name="action_next">След.</string>
+
+    <!-- API card -->
+    <string name="card_api">Справочник API</string>
+    <string name="api_reference">v%1$s · api v%2$s\n\nGET  /health\nGET  /state\nPOST /control\n{\"action\":\"seek\",\"positionMs\":60000}\nGET  /sessions\nGET  /artwork\n\nЗаголовок: Authorization: Bearer &lt;token&gt;</string>
+
+    <!-- Toasts -->
+    <string name="toast_port_saved">Порт %1$d сохранён, сервер перезапущен</string>
+    <string name="toast_server_started">Запуск сервера…</string>
+    <string name="toast_server_stopped">Сервер остановлен</string>
+    <string name="toast_token_copied">Токен скопирован</string>
+    <string name="toast_token_regenerated">Создан новый токен, обновите мост</string>
+    <string name="toast_no_settings_screen">На этом устройстве нет такого экрана настроек</string>
+
+    <!-- Notification access screen -->
+    <string name="notification_access_title">Доступ к уведомлениям</string>
+    <string name="notification_listener_label">ScrcpyBar media listener</string>
+    <string name="listener_granted_banner">Доступ к уведомлениям выдан</string>
+    <string name="listener_denied_banner">Доступ к уведомлениям не выдан</string>
+    <string name="notification_access_why">Приложение читает состояние воспроизведения через MediaSessionManager. Android открывает список активных сессий только тем приложениям, которые пользователь включил здесь. Приложение читает состояние и вызывает штатные команды MediaController: play, pause, next, previous, seek.</string>
+    <string name="notification_access_how_title">Как выдать доступ</string>
+    <string name="notification_access_steps">1. Нажмите «Открыть настройки уведомлений».\n2. Найдите «ScrcpyBar media listener».\n3. Включите переключатель и подтвердите.\n4. Вернитесь сюда и нажмите «Обновить».</string>
+    <string name="action_open_app_notification_settings">Настройки уведомлений приложения</string>
+    <string name="action_refresh">Обновить статус</string>
+
+    <!-- Service notification -->
+    <string name="notification_channel_name">Мост ScrcpyBar</string>
+    <string name="notification_channel_description">Держит локальный HTTP-API управления медиа доступным десктопному мосту.</string>
+    <string name="notification_title">Мост ScrcpyBar работает</string>
+    <string name="notification_text_fallback">Ожидание подключения к сети</string>
+    <string name="notification_big_text">Мост: %1$s:%2$d\nНажмите, чтобы открыть, «Остановить» — чтобы выключить сервер.</string>
+</resources>

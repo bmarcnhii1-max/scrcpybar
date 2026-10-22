@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OutputType>WinExe</OutputType>
+    <!-- Single-file export: publish produces one exe that carries the runtime and silence.wav. -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+  </ItemGroup>
+
+  <!-- First-run setup payload: built widget package and companion APK get embedded into
+       the single-file exe when the artifacts exist, so a fresh PC needs nothing else. -->
+  <ItemGroup Condition="Exists('..\ScrcpyBar.Widget\AppPackages\ScrcpyBar.Widget_1.0.0.0_x64_Test\ScrcpyBar.Widget_1.0.0.0_x64.msix')">
+    <EmbeddedResource Include="..\ScrcpyBar.Widget\AppPackages\ScrcpyBar.Widget_1.0.0.0_x64_Test\ScrcpyBar.Widget_1.0.0.0_x64.msix" LogicalName="widget.msix" />
+    <EmbeddedResource Include="..\ScrcpyBar.Widget\AppPackages\ScrcpyBar.Widget_1.0.0.0_x64_Test\ScrcpyBar.Widget_1.0.0.0_x64.cer" LogicalName="widget.cer" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('..\ScrcpyBar.Android\app\build\outputs\apk\debug\app-debug.apk')">
+    <EmbeddedResource Include="..\ScrcpyBar.Android\app\build\outputs\apk\debug\app-debug.apk" LogicalName="companion.apk" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="silence.wav" LogicalName="silence.wav" />
+    <None Update="silence.wav">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="device.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

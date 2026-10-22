@@ -1,0 +1,179 @@
+<Page
+    x:Class="ScrcpyBar.Widget.WidgetPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Background="Transparent">
+
+    <Grid Background="#E00B0F19" Padding="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Grid Grid.Row="0" Margin="0,0,0,10">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Image Source="ms-appx:///Assets/Square44x44Logo.png"
+                       Width="18" Height="18" Margin="0,0,8,0"/>
+                <TextBlock Text="SCRCPY BAR" FontSize="11" FontWeight="Bold" Foreground="#9CA3AF" CharacterSpacing="60" VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Spacing="8">
+                <Button x:Name="LyricsToggleBtn" Content="Текст" FontSize="10" Padding="8,3" 
+                        Background="#15FFFFFF" Foreground="#9CA3AF" BorderThickness="1" BorderBrush="#20FFFFFF"
+                        CornerRadius="9" Click="LyricsToggle_Click" ToolTipService.ToolTip="Слова песни"/>
+                <Border x:Name="StatusBadge" Background="#15FFFFFF" 
+                        CornerRadius="10" Padding="8,2" BorderThickness="1" BorderBrush="#20FFFFFF">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <Ellipse x:Name="StatusDot" Width="7" Height="7" Fill="#EF4444" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="StatusText" Text="Офлайн" FontSize="10" FontWeight="SemiBold" Foreground="#D1D5DB" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </Grid>
+
+        <!-- Track Info Hero -->
+        <Grid x:Name="TrackInfoPanel" Grid.Row="1" VerticalAlignment="Center" Margin="0,2,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Album Art / Icon Box -->
+            <Border Grid.Column="0" Width="58" Height="58" CornerRadius="10" Background="#1A2333" 
+                    BorderThickness="1" BorderBrush="#30FFFFFF" Margin="0,0,12,0">
+                <Grid>
+                    <Image x:Name="CoverImage" Stretch="UniformToFill" Visibility="Collapsed"/>
+                    <FontIcon x:Name="MusicIcon" Glyph="&#xE8D6;" FontSize="24" Foreground="#107C41" 
+                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+
+            <!-- Track Metadata -->
+            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                <TextBlock x:Name="TrackTitleText" Text="Загрузка..." FontSize="15" FontWeight="Bold" 
+                           Foreground="#F9FAFB" TextTrimming="CharacterEllipsis"/>
+                <TextBlock x:Name="TrackArtistText" Text="Подключение к телефону..." FontSize="12" 
+                           Foreground="#9CA3AF" TextTrimming="CharacterEllipsis"/>
+                <TextBlock x:Name="TrackAppText" Text="--" FontSize="10" FontWeight="Bold" 
+                           Foreground="#107C41" Margin="0,2,0,0"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- Karaoke lyrics -->
+        <Grid x:Name="LyricsPanel" Grid.Row="1" Margin="0,2,0,8" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <TextBlock x:Name="LyricsStatus" Text="Слова песни" FontSize="9" FontWeight="SemiBold"
+                       Foreground="#6B7280" CharacterSpacing="60" Margin="0,0,0,6"/>
+
+            <StackPanel Grid.Row="1" VerticalAlignment="Center" Spacing="4">
+                <TextBlock x:Name="LyricPrev" Text="" FontSize="12" Foreground="#4B5563"
+                           TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"
+                           HorizontalAlignment="Center" TextAlignment="Center" Opacity="0.6"
+                           Tapped="LyricPrev_Tapped" ToolTipService.ToolTip="Нажми — перейти к этой строке"/>
+
+                <!-- The current line is simply bright, the ones around it are dim. The line
+                     changes as the song plays, which is the sync - no sweeping highlight. -->
+                <TextBlock x:Name="LyricCur" Text="" FontSize="19" FontWeight="Bold"
+                           TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis"
+                           HorizontalAlignment="Center" TextAlignment="Center" Foreground="#F9FAFB"
+                           Tapped="LyricCur_Tapped" ToolTipService.ToolTip="Нажми — перейти к этой строке"/>
+
+                <TextBlock x:Name="LyricNext" Text="" FontSize="12" Foreground="#4B5563"
+                           TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"
+                           HorizontalAlignment="Center" TextAlignment="Center" Opacity="0.45"
+                           Tapped="LyricNext_Tapped" ToolTipService.ToolTip="Нажми — перейти к этой строке"/>
+            </StackPanel>
+        </Grid>
+
+        <Grid x:Name="ProgressPanel" Grid.Row="2" Margin="0,0,0,6" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <Grid x:Name="SeekVisual" Height="22" Background="Transparent"
+                  SizeChanged="SeekVisual_SizeChanged"
+                  PointerPressed="SeekVisual_PointerPressed"
+                  PointerMoved="SeekVisual_PointerMoved"
+                  PointerReleased="SeekVisual_PointerReleased"
+                  PointerCanceled="SeekVisual_PointerCanceled"
+                  PointerCaptureLost="SeekVisual_PointerCaptureLost">
+                <ProgressBar x:Name="TrackProgress" Minimum="0" Maximum="100" Value="0" Height="5"
+                             VerticalAlignment="Center" IsIndeterminate="False" IsHitTestVisible="False"
+                             Background="#25FFFFFF" Foreground="#107C41"/>
+                <Grid x:Name="SeekThumb" Width="14" Height="14" HorizontalAlignment="Left" VerticalAlignment="Center" IsHitTestVisible="False">
+                    <Ellipse Width="14" Height="14" Fill="#33FFFFFF"/>
+                    <Ellipse Width="8" Height="8" Fill="#FFFFFFFF"/>
+                </Grid>
+            </Grid>
+            <Grid Grid.Row="1" Margin="0,3,0,0">
+                <TextBlock x:Name="PositionText" Text="0:00" FontSize="9" FontFamily="Consolas" Foreground="#9CA3AF"/>
+                <TextBlock x:Name="DurationText" Text="0:00" HorizontalAlignment="Right" FontSize="9" FontFamily="Consolas" Foreground="#9CA3AF"/>
+            </Grid>
+        </Grid>
+
+        <!-- Controls & Volume Bar -->
+        <Grid Grid.Row="3" Margin="0,4,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Volume Buttons -->
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Spacing="4">
+                <Button x:Name="VolDownBtn" Content="-" Width="26" Height="26" Padding="0" 
+                        Background="#15FFFFFF" Foreground="#D1D5DB" BorderThickness="0" CornerRadius="13"
+                        HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                        Click="VolDown_Click"/>
+                <TextBlock x:Name="VolText" Text="13" FontSize="11" Foreground="#9CA3AF" 
+                           VerticalAlignment="Center" Margin="2,0"/>
+                <Button x:Name="VolUpBtn" Content="+" Width="26" Height="26" Padding="0" 
+                        Background="#15FFFFFF" Foreground="#D1D5DB" BorderThickness="0" CornerRadius="13"
+                        HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                        Click="VolUp_Click"/>
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="10">
+                <Button x:Name="PrevButton" Width="36" Height="36" Padding="0" CornerRadius="18"
+                        Background="#15FFFFFF" BorderThickness="0"
+                        HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                        Click="Prev_Click" ToolTipService.ToolTip="Предыдущий трек">
+                    <FontIcon FontFamily="Segoe MDL2 Assets" Glyph="&#xE892;" FontSize="15" Foreground="#F3F4F6"/>
+                </Button>
+
+                <Button x:Name="PlayButton" Width="46" Height="46" Padding="0" CornerRadius="23"
+                        Background="#107C41" BorderThickness="0"
+                        HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                        Click="PlayPause_Click" ToolTipService.ToolTip="Пауза / Воспроизведение">
+                    <FontIcon x:Name="PlayIcon" FontFamily="Segoe MDL2 Assets" Glyph="&#xE768;" FontSize="19" Foreground="White"/>
+                </Button>
+
+                <Button x:Name="NextButton" Width="36" Height="36" Padding="0" CornerRadius="18"
+                        Background="#15FFFFFF" BorderThickness="0"
+                        HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                        Click="Next_Click" ToolTipService.ToolTip="Следующий трек">
+                    <FontIcon FontFamily="Segoe MDL2 Assets" Glyph="&#xE893;" FontSize="15" Foreground="#F3F4F6"/>
+                </Button>
+            </StackPanel>
+
+            <!-- Refresh Button -->
+            <Button Grid.Column="2" Width="28" Height="28" Padding="0" CornerRadius="14" 
+                    Background="Transparent" BorderThickness="0"
+                    HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                    Click="Refresh_Click"
+                    ToolTipService.ToolTip="Обновить вручную">
+                <FontIcon FontFamily="Segoe MDL2 Assets" Glyph="&#xE72C;" FontSize="13" Foreground="#6B7280"/>
+            </Button>
+        </Grid>
+    </Grid>
+</Page>

@@ -1,0 +1,3 @@
+@echo off
+echo Opening ScrcpyBar in Visual Studio 2022...
+start "" "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe" "%~dp0ScrcpyBar.sln"
