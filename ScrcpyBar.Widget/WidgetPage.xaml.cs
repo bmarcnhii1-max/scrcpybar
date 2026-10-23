@@ -50,6 +50,8 @@ namespace ScrcpyBar.Widget
         private string _currentTitle = "";
         private string _currentArtist = "";
         private string _lastLoggedTrack = "";
+        private DateTime _lyricsLastAttemptUtc = DateTime.MinValue;
+        private bool _lyricsUnavailable;
 
         // --- click a line to jump there ----------------------------------------
         // A cold lyrics lookup can take a few seconds while the bridge reaches lrclib.net.
@@ -108,6 +110,14 @@ namespace ScrcpyBar.Widget
                 if (JsonObject.TryParse(payload, out JsonObject json))
                 {
                     ApplyTrackData(json);
+                }
+
+                // The bridge might have been busy when the lyrics were first requested, so the
+                // same song is re-tried every 30s while the panel is open.
+                if (_lyricsEnabled && _lyricsUnavailable && !_lyricsLoading &&
+                    (DateTime.UtcNow - _lyricsLastAttemptUtc).TotalSeconds > 30)
+                {
+                    _ = FetchLyricsAsync();
                 }
             }
             catch
@@ -351,6 +361,7 @@ namespace ScrcpyBar.Widget
             }
 
             _lyricsLoading = true;
+            _lyricsLastAttemptUtc = DateTime.UtcNow;
             string requestedKey = _lyricsKey;
             try
             {
@@ -358,6 +369,7 @@ namespace ScrcpyBar.Widget
                 if (!JsonObject.TryParse(payload, out JsonObject json))
                 {
                     LyricsStatus.Text = "Слова недоступны";
+                    _lyricsUnavailable = true;
                     return;
                 }
 
@@ -365,6 +377,7 @@ namespace ScrcpyBar.Widget
                 bool instrumental = json.GetNamedBoolean("instrumental", false);
                 bool synced = json.GetNamedBoolean("synced", false);
                 string plain = json.GetNamedString("plain", "");
+                _lyricsUnavailable = !found && !instrumental;
 
             if (instrumental)
             {
@@ -435,6 +448,7 @@ namespace ScrcpyBar.Widget
             catch
             {
                 LyricsStatus.Text = "Слова недоступны";
+                _lyricsUnavailable = true;
             }
             finally
             {

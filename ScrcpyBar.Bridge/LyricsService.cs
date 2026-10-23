@@ -47,6 +47,10 @@ public class LyricsService
 
     private DateTime _serviceUnavailableUntil = DateTime.MinValue;
     private int _unavailableStrikes;
+    private readonly Dictionary<string, DateTime> _lastAttemptAt = new(StringComparer.Ordinal);
+
+    /// <summary>When a track may be retried after a failed lookup (throttle/network noise).</summary>
+    private static readonly TimeSpan FailedRetryInterval = TimeSpan.FromMinutes(2);
 
     public LyricsService(ILogger<LyricsService> logger)
     {
@@ -75,6 +79,22 @@ public class LyricsService
         }
 
         string key = BuildKey(cleanArtist, cleanTitle);
+
+        // A failed lookup (throttle, network noise) may be retried after a while instead of
+        // being stuck for as long as the track keeps playing.
+        if (!forceRefresh && _lastAttemptAt.TryGetValue(key, out var lastAttempt) &&
+            DateTime.UtcNow - lastAttempt < FailedRetryInterval)
+        {
+            if (_memory.TryGetValue(key, out var prior))
+            {
+                if (prior.Result.Found || DateTime.UtcNow - prior.CachedAt < NegativeTtl)
+                {
+                    return prior.Result;
+                }
+            }
+            return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
+        }
+        _lastAttemptAt[key] = DateTime.UtcNow;
 
         if (!forceRefresh && _memory.TryGetValue(key, out var cached))
         {
@@ -327,10 +347,12 @@ public class LyricsService
             if (response.StatusCode == HttpStatusCode.ServiceUnavailable ||
                 response.StatusCode == HttpStatusCode.TooManyRequests)
             {
-                // Escalating pause instead of a fixed one: a busy lrclib keeps rejecting a
-                // client that retries right after the previous window ends.
+                // lrclib answers "busy" to single requests all the time, so the first pause is
+                // short; only a client that keeps hitting the throttle escalates exponentially
+                // (30s, 1m, 2m, 4m... capped at 30 minutes).
                 _unavailableStrikes++;
-                TimeSpan pause = TimeSpan.FromMinutes(Math.Min(10.0 * _unavailableStrikes, 30.0));
+                double seconds = 30.0 * Math.Pow(2, Math.Min(_unavailableStrikes - 1, 6));
+                TimeSpan pause = TimeSpan.FromSeconds(Math.Min(seconds, 30.0 * 60.0));
 
                 var retryAfter = response.Headers.RetryAfter;
                 if (retryAfter?.Delta is TimeSpan delta && delta > pause)
@@ -362,6 +384,16 @@ public class LyricsService
             using var document = JsonDocument.Parse(body);
             _unavailableStrikes = 0;
             return (true, document.RootElement.Clone());
+        }
+        catch (HttpRequestException ex) when ((ex.StatusCode ?? 0) == HttpStatusCode.TooManyRequests ||
+                                              (ex.StatusCode ?? 0) == HttpStatusCode.ServiceUnavailable)
+        {
+            // Reached when HttpClient surfaces the status as an exception (auto-decompress
+            // failures, etc.) - apply the same backoff as the normal status path.
+            _unavailableStrikes++;
+            double seconds = 30.0 * Math.Pow(2, Math.Min(_unavailableStrikes - 1, 6));
+            _serviceUnavailableUntil = DateTime.UtcNow + TimeSpan.FromSeconds(Math.Min(seconds, 30.0 * 60.0));
+            return (false, default);
         }
         catch (Exception ex)
         {

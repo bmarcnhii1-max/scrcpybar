@@ -21,6 +21,7 @@ public class LyricsWarmupService : BackgroundService
     private readonly LyricsService _lyrics;
     private readonly ILogger<LyricsWarmupService> _logger;
     private string _lastKey = "";
+    private DateTime _lastRetryAt = DateTime.MinValue;
 
     public LyricsWarmupService(AdbService adb, LyricsService lyrics, ILogger<LyricsWarmupService> logger)
     {
@@ -69,6 +70,35 @@ public class LyricsWarmupService : BackgroundService
         }
 
         _lastKey = key;
-        await _lyrics.GetAsync(track.Title, track.Artist, track.DurationMs);
+        var result = await _lyrics.GetAsync(track.Title, track.Artist, track.DurationMs);
+
+        // A throttled or flaky lookup must not stick for the whole track: retry the same song
+        // every couple of minutes until it resolves.
+        if (!result.Found && result.Source == "unavailable")
+        {
+            _ = RetryUntilFoundAsync(key);
+        }
+    }
+
+    private async Task RetryUntilFoundAsync(string key)
+    {
+        while (key == _lastKey)
+        {
+            await Task.Delay(TimeSpan.FromMinutes(2));
+            if (key != _lastKey)
+            {
+                return;
+            }
+            var fresh = await _adb.GetNowPlayingAsync();
+            if (!fresh.HasTrack)
+            {
+                return;
+            }
+            var result = await _lyrics.GetAsync(fresh.Title, fresh.Artist, fresh.DurationMs, forceRefresh: true);
+            if (result.Found)
+            {
+                return;
+            }
+        }
     }
 }
