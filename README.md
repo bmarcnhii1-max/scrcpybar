@@ -103,61 +103,10 @@ self-contained exe, внутри него .NET 8, виджет, companion и в�
 
 ---
 
-## Сборка из исходников
+## Сборка и разработка
 
-**Требуется:** Visual Studio 2022 (рабочая нагрузка «Разработка приложений для
-универсальной платформы Windows», Windows 10/11 SDK), .NET 8 SDK, JDK 17, Android SDK,
-`adb` в `PATH`.
-
-| Компонент | Команда |
-|---|---|
-| Companion (APK) | `cd ScrcpyBar.Android && gradlew.bat assembleDebug` |
-| Виджет (MSIX) | `powershell -ExecutionPolicy Bypass -File .\rebuild_and_deploy.ps1` |
-| Bridge (EXE) | `dotnet publish ScrcpyBar.Bridge -c Release -r win-x64` |
-
-Скрипт `rebuild_and_deploy.ps1` собирает виджет, регистрирует пакет и выдаёт
-loopback-exemption. Готовые артефакты кладутся в `build/` — именно они и публикуются
-в Releases.
-
-<details>
-<summary><b>Структура репозитория</b></summary>
-
-```
-ScrcpyBar.sln              решение Visual Studio 2022
-ScrcpyBar.Android/         Kotlin-приложение на телефоне (com.scrcpybar.companion)
-ScrcpyBar.Bridge/          фоновый сервис .NET 8 (один exe)
-ScrcpyBar.Widget/          виджет Xbox Game Bar (UWP XAML)
-build/                     готовые артефакты релиза
-```
-
-**Скрипты:**
-
-| Файл | Назначение |
-|---|---|
-| `rebuild_and_deploy.ps1` / `.bat` | Пересборка виджета + регистрация + loopback-exemption. |
-| `verify.ps1` | Сквозная проверка: companion → Bridge → HTTP-API → SMTC → виджет. Флаг `-Transport` добавляет нажатия кнопок. |
-| `check_smtc_sessions.ps1` | Диагностика: все SMTC-сессии системы, метаданные, обложка. |
-| `check_widget_log.ps1` | Лог событий указателя виджета. |
-| `check_lyrics_flow.ps1` | Прогон сценария слов песни как в виджете. |
-| `start_bridge.bat` | Запуск Bridge. |
-| `open_in_vs.bat` | Открыть решение в Visual Studio 2022. |
-
-**HTTP-API Bridge** (`127.0.0.1:39281`):
-
-| Метод | Путь | Описание |
-|---|---|---|
-| `GET` | `/api/track` | Трек, позиция, длительность, обложка |
-| `GET` | `/api/cover` | Обложка (JPEG/PNG) |
-| `GET` | `/api/lyrics` | Слова песни (`linesText` — `timeMs<TAB>текст`) |
-| `POST` | `/api/play-pause` | Пауза / воспроизведение |
-| `POST` | `/api/next` · `/api/prev` | Следующий / предыдущий трек |
-| `POST` | `/api/seek?seconds=±N` | Перемотка относительно (шаг ±300 с) |
-| `POST` | `/api/seek-position?positionMs=&durationMs=` | Точная перемотка |
-| `POST` | `/api/rewind` · `/api/fast-forward` | Короткая перемотка ±5 с |
-| `POST` | `/api/vol-up` · `/api/vol-down` · `/api/volume?level=N` | Громкость |
-| `GET` | `/` | Веб-пульт |
-
-</details>
+Инструкции по сборке, структура репозитория, скрипты и HTTP-API вынесены в
+[docs/BUILDING.md](docs/BUILDING.md).
 
 ---
 
@@ -172,18 +121,7 @@ build/                     готовые артефакты релиза
 
 ## Troubleshooting
 
-| Симптом | Причина и решение |
-|---|---|
-| `Мост офлайн` в виджете | Не запущен Bridge. Запусти `ScrcpyBar.Bridge.exe`, дождись значка в трее. |
-| Виджет не появился в `Win + G` | Не установлен пакет. Запусти `install-widget.ps1` из релиза вручную или заново пройди первоначальную настройку. |
-| Виджет не видит Bridge | Не выдан loopback-exemption. `install-widget.ps1` делает это сам (`CheckNetIsolation LoopbackExempt`). |
-| `Нет телефона` | Телефон не в `adb devices`. Переподключи кабель, включи «Отладку по USB», проверь `adb devices`. |
-| `Нет доступа к медиа` | Companion без разрешения на уведомления. Открой приложение на телефоне и выдай «Доступ к уведомлениям». |
-| Пустое поле обложки | Плеер не отдаёт обложку через `MediaSession` — это нормально, остальные поля работают. |
-| Слова не появляются | Для трека нет синхронных слов на lrclib.net. Показывается обычный текст песни. |
-| **MIUI / HyperOS: companion не отвечает** | Фоновый сервис убивается системой. Разреши companion автозапуск и работа в фоне: *Настройки → Приложения → ScrcpyBar Companion → Автозапуск, без ограничений*, и отключи оптимизацию батареи для него. |
-| Значок в трее не появился | Bridge падал при старте — смотри лог. Обычно занят порт `39281` или кривой .NET SDK. |
-| Логи | `%LOCALAPPDATA%\ScrcpyBar\bridge.log` (ротация на 5 МБ, старый — `bridge.old.log`). Для консоли: `ScrcpyBar.Bridge.exe --console`. |
+Таблица «симптом → решение» вынесена в [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 ---
 
