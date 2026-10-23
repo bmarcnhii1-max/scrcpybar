@@ -183,12 +183,19 @@ public class LyricsService
             return FromJson(directResult, "lrclib:get");
         }
 
+        // A throttled lrclib reported as "nothing found" would poison the cache, so the
+        // pause set by GetJsonAsync has to be surfaced here as well.
+        if (DateTime.UtcNow < _serviceUnavailableUntil)
+        {
+            return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
+        }
+
         // Fall back to the search endpoint and pick the closest match that has timed lyrics.
         string search = $"/search?track_name={Uri.EscapeDataString(title)}&artist_name={Uri.EscapeDataString(artist)}";
         var (searchOk, searchResult) = await GetJsonAsync(search);
-        if (!searchOk)
+        if (!searchOk || DateTime.UtcNow < _serviceUnavailableUntil)
         {
-            return new LyricsResult(false, false, "", new List<LyricLine>(), "not-found");
+            return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
         }
 
         if (searchResult.ValueKind != JsonValueKind.Array)
