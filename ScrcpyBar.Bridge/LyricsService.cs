@@ -37,11 +37,16 @@ public class LyricsService
     private const string CacheDirectoryName = "lyrics-cache";
     private const string UserAgent = "ScrcpyBar/1.0 (Windows Game Bar music widget)";
 
+    /// <summary>How long a genuine "no lyrics on lrclib" result stays cached in memory.</summary>
+    private static readonly TimeSpan NegativeTtl = TimeSpan.FromMinutes(10);
+
     private readonly HttpClient _http;
     private readonly ILogger<LyricsService> _logger;
     private readonly SemaphoreSlim _lock = new(1, 1);
-    private readonly Dictionary<string, LyricsResult> _memory = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, CachedLyrics> _memory = new(StringComparer.Ordinal);
+
     private DateTime _serviceUnavailableUntil = DateTime.MinValue;
+    private int _unavailableStrikes;
 
     public LyricsService(ILogger<LyricsService> logger)
     {
@@ -52,6 +57,8 @@ public class LyricsService
         };
         _http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", UserAgent);
     }
+
+    private sealed record CachedLyrics(LyricsResult Result, DateTime CachedAt);
 
     /// <summary>
     /// Returns the lyrics for a track. The result is cached per artist/title, so repeated calls
@@ -71,7 +78,11 @@ public class LyricsService
 
         if (!forceRefresh && _memory.TryGetValue(key, out var cached))
         {
-            return cached;
+            if (cached.Result.Found || DateTime.UtcNow - cached.CachedAt < NegativeTtl)
+            {
+                return cached.Result;
+            }
+            _memory.Remove(key);
         }
 
         string cachePath = CachePath(key);
@@ -83,7 +94,7 @@ public class LyricsService
                 var result = ParseCached(raw, key);
                 if (result.Found)
                 {
-                    _memory[key] = result;
+                    _memory[key] = new CachedLyrics(result, DateTime.UtcNow);
                     return result;
                 }
             }
@@ -98,11 +109,21 @@ public class LyricsService
         {
             if (!forceRefresh && _memory.TryGetValue(key, out var afterLock))
             {
-                return afterLock;
+                if (afterLock.Result.Found || DateTime.UtcNow - afterLock.CachedAt < NegativeTtl)
+                {
+                    return afterLock.Result;
+                }
+                _memory.Remove(key);
             }
 
             var fetched = await FetchAsync(cleanTitle, cleanArtist, durationMs);
-            _memory[key] = fetched;
+
+            // A throttled lrclib must not be remembered as "no lyrics": the warmup and the
+            // widget have to retry once the pause expires.
+            if (fetched.Source != "unavailable")
+            {
+                _memory[key] = new CachedLyrics(fetched, DateTime.UtcNow);
+            }
 
             if (fetched.Found)
             {
@@ -127,6 +148,12 @@ public class LyricsService
 
     private async Task<LyricsResult> FetchAsync(string title, string artist, long durationMs)
     {
+        // Throttled: skip the network entirely so the warmup does not re-open the ban window.
+        if (DateTime.UtcNow < _serviceUnavailableUntil)
+        {
+            return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
+        }
+
         try
         {
             return await FetchCoreAsync(title, artist, durationMs);
@@ -231,8 +258,29 @@ public class LyricsService
             if (response.StatusCode == HttpStatusCode.ServiceUnavailable ||
                 response.StatusCode == HttpStatusCode.TooManyRequests)
             {
-                _serviceUnavailableUntil = DateTime.UtcNow.AddMinutes(5);
-                _logger.LogWarning("lrclib is unavailable, pausing lookups for 5 minutes");
+                // Escalating pause instead of a fixed one: a busy lrclib keeps rejecting a
+                // client that retries right after the previous window ends.
+                _unavailableStrikes++;
+                TimeSpan pause = TimeSpan.FromMinutes(Math.Min(10.0 * _unavailableStrikes, 30.0));
+
+                var retryAfter = response.Headers.RetryAfter;
+                if (retryAfter?.Delta is TimeSpan delta && delta > pause)
+                {
+                    pause = delta;
+                }
+                else if (retryAfter?.Date is DateTimeOffset retryDate)
+                {
+                    TimeSpan untilDate = retryDate.UtcDateTime - DateTime.UtcNow;
+                    if (untilDate > pause)
+                    {
+                        pause = untilDate;
+                    }
+                }
+
+                _serviceUnavailableUntil = DateTime.UtcNow + pause;
+                _logger.LogWarning(
+                    "lrclib is unavailable, pausing lookups for {Minutes} minutes (strike {Strike})",
+                    pause.TotalMinutes, _unavailableStrikes);
                 return (false, default);
             }
             if (!response.IsSuccessStatusCode)
@@ -243,6 +291,7 @@ public class LyricsService
 
             string body = await response.Content.ReadAsStringAsync();
             using var document = JsonDocument.Parse(body);
+            _unavailableStrikes = 0;
             return (true, document.RootElement.Clone());
         }
         catch (Exception ex)

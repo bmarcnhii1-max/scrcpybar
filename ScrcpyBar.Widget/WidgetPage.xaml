@@ -7,6 +7,121 @@
     mc:Ignorable="d"
     Background="Transparent">
 
+    <Page.Resources>
+        <!-- Buttons must not fall back to the system accent color on hover/press: inside
+             Game Bar that accent can be any color and look out of place. -->
+        <SolidColorBrush x:Key="SubtleHover">22FFFFFF</SolidColorBrush>
+        <SolidColorBrush x:Key="SubtlePressed">2EFFFFFF</SolidColorBrush>
+
+        <ControlTemplate x:Key="SubtleButtonTemplate" TargetType="Button">
+            <Grid x:Name="Root" CornerRadius="{TemplateBinding CornerRadius}"
+                  Background="{TemplateBinding Background}">
+                <VisualStateManager.VisualStateGroups>
+                    <VisualStateGroup x:Name="CommonStates">
+                        <VisualState x:Name="Normal"/>
+                        <VisualState x:Name="PointerOver"/>
+                        <VisualState x:Name="Pressed"/>
+                        <VisualState x:Name="Disabled"/>
+                    </VisualStateGroup>
+                </VisualStateManager.VisualStateGroups>
+                <ContentPresenter Content="{TemplateBinding Content}"
+                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                  Foreground="{TemplateBinding Foreground}"
+                                  HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                  VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                  Padding="{TemplateBinding Padding}"/>
+            </Grid>
+        </ControlTemplate>
+
+        <Style x:Key="Subtle" TargetType="Button">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid x:Name="Root" CornerRadius="{TemplateBinding CornerRadius}"
+                              Background="{TemplateBinding Background}">
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal"/>
+                                    <VisualState x:Name="PointerOver">
+                                        <Storyboard>
+                                            <ColorAnimation Storyboard.TargetName="Root"
+                                                            Storyboard.TargetProperty="(Grid.Background).(SolidColorBrush.Color)"
+                                                            To="#22FFFFFF" Duration="0:0:0.05"/>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <Storyboard>
+                                            <ColorAnimation Storyboard.TargetName="Root"
+                                                            Storyboard.TargetProperty="(Grid.Background).(SolidColorBrush.Color)"
+                                                            To="#2EFFFFFF" Duration="0:0:0.02"/>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="Disabled">
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="Root"
+                                                             Storyboard.TargetProperty="Opacity"
+                                                             To="0.4" Duration="0"/>
+                                        </Storyboard>
+                                    </VisualState>
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                            <ContentPresenter Content="{TemplateBinding Content}"
+                                              ContentTemplate="{TemplateBinding ContentTemplate}"
+                                              Foreground="{TemplateBinding Foreground}"
+                                              HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              Padding="{TemplateBinding Padding}"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SubtleGreen" TargetType="Button" BasedOn="{StaticResource Subtle}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid x:Name="Root" CornerRadius="{TemplateBinding CornerRadius}"
+                              Background="{TemplateBinding Background}">
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal"/>
+                                    <VisualState x:Name="PointerOver">
+                                        <Storyboard>
+                                            <ColorAnimation Storyboard.TargetName="Root"
+                                                            Storyboard.TargetProperty="(Grid.Background).(SolidColorBrush.Color)"
+                                                            To="#15803D" Duration="0:0:0.05"/>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <Storyboard>
+                                            <ColorAnimation Storyboard.TargetName="Root"
+                                                            Storyboard.TargetProperty="(Grid.Background).(SolidColorBrush.Color)"
+                                                            To="#0E5C2D" Duration="0:0:0.02"/>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="Disabled">
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="Root"
+                                                             Storyboard.TargetProperty="Opacity"
+                                                             To="0.4" Duration="0"/>
+                                        </Storyboard>
+                                    </VisualState>
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                            <ContentPresenter Content="{TemplateBinding Content}"
+                                              ContentTemplate="{TemplateBinding ContentTemplate}"
+                                              Foreground="{TemplateBinding Foreground}"
+                                              HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              Padding="{TemplateBinding Padding}"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Page.Resources>
+
     <Grid Background="#E00B0F19" Padding="14">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -24,7 +139,8 @@
             </StackPanel>
 
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Spacing="8">
-                <Button x:Name="LyricsToggleBtn" Content="Текст" FontSize="10" Padding="8,3" 
+                <Button x:Name="LyricsToggleBtn" Content="Текст" FontSize="10" Padding="8,3"
+                        Style="{StaticResource Subtle}"
                         Background="#15FFFFFF" Foreground="#9CA3AF" BorderThickness="1" BorderBrush="#20FFFFFF"
                         CornerRadius="9" Click="LyricsToggle_Click" ToolTipService.ToolTip="Слова песни"/>
                 <Border x:Name="StatusBadge" Background="#15FFFFFF" 
@@ -131,13 +247,15 @@
 
             <!-- Volume Buttons -->
             <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Spacing="4">
-                <Button x:Name="VolDownBtn" Content="-" Width="26" Height="26" Padding="0" 
+                <Button x:Name="VolDownBtn" Content="-" Width="26" Height="26" Padding="0"
+                        Style="{StaticResource Subtle}" 
                         Background="#15FFFFFF" Foreground="#D1D5DB" BorderThickness="0" CornerRadius="13"
                         HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                         Click="VolDown_Click"/>
                 <TextBlock x:Name="VolText" Text="13" FontSize="11" Foreground="#9CA3AF" 
                            VerticalAlignment="Center" Margin="2,0"/>
-                <Button x:Name="VolUpBtn" Content="+" Width="26" Height="26" Padding="0" 
+                <Button x:Name="VolUpBtn" Content="+" Width="26" Height="26" Padding="0"
+                        Style="{StaticResource Subtle}" 
                         Background="#15FFFFFF" Foreground="#D1D5DB" BorderThickness="0" CornerRadius="13"
                         HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                         Click="VolUp_Click"/>
@@ -145,6 +263,7 @@
 
             <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="10">
                 <Button x:Name="PrevButton" Width="36" Height="36" Padding="0" CornerRadius="18"
+                        Style="{StaticResource Subtle}"
                         Background="#15FFFFFF" BorderThickness="0"
                         HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                         Click="Prev_Click" ToolTipService.ToolTip="Предыдущий трек">
@@ -152,6 +271,7 @@
                 </Button>
 
                 <Button x:Name="PlayButton" Width="46" Height="46" Padding="0" CornerRadius="23"
+                        Style="{StaticResource SubtleGreen}"
                         Background="#107C41" BorderThickness="0"
                         HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                         Click="PlayPause_Click" ToolTipService.ToolTip="Пауза / Воспроизведение">
@@ -159,6 +279,7 @@
                 </Button>
 
                 <Button x:Name="NextButton" Width="36" Height="36" Padding="0" CornerRadius="18"
+                        Style="{StaticResource Subtle}"
                         Background="#15FFFFFF" BorderThickness="0"
                         HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                         Click="Next_Click" ToolTipService.ToolTip="Следующий трек">
@@ -167,7 +288,8 @@
             </StackPanel>
 
             <!-- Refresh Button -->
-            <Button Grid.Column="2" Width="28" Height="28" Padding="0" CornerRadius="14" 
+            <Button Grid.Column="2" Width="28" Height="28" Padding="0" CornerRadius="14"
+                    Style="{StaticResource Subtle}"
                     Background="Transparent" BorderThickness="0"
                     HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                     Click="Refresh_Click"
