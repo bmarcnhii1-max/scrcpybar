@@ -232,19 +232,22 @@ public class LyricsService
         }
 
         // 3. Search with both names, then 4. with the track alone: artist tags are often
-        //    "Various Artists", a feat. list or a localized spelling the search cannot match.
+        //    "Various Artists", a feat. list or a localized spelling the search cannot match
+        //    (YouTube Music says "Anacon-daz", lrclib lists "Anacondaz"). An empty artist-scoped
+        //    result counts as a failure and still opens the track-only fallback.
         string trackQuery = Uri.EscapeDataString(title);
         string artistQuery = Uri.EscapeDataString(artist);
         var (searchOk, searchResult) = await GetJsonAsync(
             $"/search?track_name={trackQuery}&artist_name={artistQuery}");
-        if (searchOk && searchResult.ValueKind != JsonValueKind.Array)
+        if (!searchOk || searchResult.ValueKind != JsonValueKind.Array ||
+            !searchResult.EnumerateArray().Any())
         {
             searchOk = false;
         }
         if (!searchOk && DateTime.UtcNow >= _serviceUnavailableUntil)
         {
             (searchOk, searchResult) = await GetJsonAsync($"/search?q={trackQuery}");
-            if (searchOk && searchResult.ValueKind != JsonValueKind.Array)
+            if (!searchOk || searchResult.ValueKind != JsonValueKind.Array)
             {
                 searchOk = false;
             }
