@@ -94,6 +94,12 @@ namespace ScrcpyBar.Widget
                 _karaokeTimer.Start();
             }
             _ = FetchTrackAsync();
+            // The bridge may have resolved the lyrics since the last attempt (restart, backoff
+            // expired), so opening the panel re-asks instead of sticking to the old failure.
+            if (_lyricsEnabled && _lyricsUnavailable)
+            {
+                _ = FetchLyricsAsync();
+            }
         }
 
         protected override void OnNavigatedFrom(NavigationEventArgs e)
