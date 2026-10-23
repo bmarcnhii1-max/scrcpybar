@@ -12,6 +12,7 @@ using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
 using Windows.UI.Xaml.Input;
 using Windows.UI.Xaml.Media;
+using Windows.UI.Xaml.Media.Animation;
 using Windows.UI.Xaml.Navigation;
 using Microsoft.Gaming.XboxGameBar;
 
@@ -43,6 +44,7 @@ namespace ScrcpyBar.Widget
         private bool _lyricsFetchPending;
         private string _lyricsKey = "";
         private string _karaokeText = "";
+        private int _lastLyricIndex = -2;
         private double _positionMs;
         private DateTime _positionStampUtc = DateTime.UtcNow;
         private string _currentTitle = "";
@@ -268,6 +270,7 @@ namespace ScrcpyBar.Widget
                 CoverImage.Visibility = Visibility.Visible;
                 MusicIcon.Visibility = Visibility.Collapsed;
                 _coverLoaded = true;
+                FadeIn(CoverImage, 0, 1, 320);
             }
             catch
             {
@@ -288,6 +291,7 @@ namespace ScrcpyBar.Widget
 
             TrackInfoPanel.Visibility = _lyricsEnabled ? Visibility.Collapsed : Visibility.Visible;
             LyricsPanel.Visibility = _lyricsEnabled ? Visibility.Visible : Visibility.Collapsed;
+            FadeIn(_lyricsEnabled ? LyricsPanel : TrackInfoPanel, 0, 1, 240);
 
             if (_lyricsEnabled)
             {
@@ -322,6 +326,7 @@ namespace ScrcpyBar.Widget
             _prevIndex = -1;
             _curIndex = -1;
             _nextIndex = -1;
+            _lastLyricIndex = -2;
             SetCurrentLine("");
             LyricPrev.Text = "";
             LyricNext.Text = "";
@@ -487,7 +492,91 @@ namespace ScrcpyBar.Widget
             _curIndex = index;
             _nextIndex = index + 1 < _lyrics.Count ? index + 1 : -1;
 
+            if (index != _lastLyricIndex)
+            {
+                _lastLyricIndex = index;
+                AnimateLyricChange();
+            }
+
             SetCurrentLine(current.Text);
+        }
+
+        // ---------------------------------------------------------------- animations
+
+        /// <summary>
+        /// The karaoke lines change with the song, so the swap itself is the animation: the
+        /// current line slides up from below, the neighbours follow with a lighter move.
+        /// </summary>
+        private void AnimateLyricChange()
+        {
+            SlideAndFade(LyricCur, fromOffset: 16, toOpacity: 1.0);
+            SlideAndFade(LyricNext, fromOffset: 10, toOpacity: 0.45);
+            SlideAndFade(LyricPrev, fromOffset: 10, toOpacity: 0.6);
+        }
+
+        private static void SlideAndFade(TextBlock block, double fromOffset, double toOpacity)
+        {
+            if (block == null)
+            {
+                return;
+            }
+
+            var transform = block.RenderTransform as Windows.UI.Xaml.Media.TranslateTransform;
+            if (transform == null)
+            {
+                transform = new Windows.UI.Xaml.Media.TranslateTransform();
+                block.RenderTransform = transform;
+            }
+
+            var easing = new Windows.UI.Xaml.Media.Animation.CubicEase { EasingMode = Windows.UI.Xaml.Media.Animation.EasingMode.EaseOut };
+            var duration = new Duration(TimeSpan.FromMilliseconds(320));
+
+            var fade = new Windows.UI.Xaml.Media.Animation.DoubleAnimation
+            {
+                From = 0,
+                To = toOpacity,
+                Duration = duration,
+                EasingFunction = easing
+            };
+            var slide = new Windows.UI.Xaml.Media.Animation.DoubleAnimation
+            {
+                From = fromOffset,
+                To = 0,
+                Duration = duration,
+                EasingFunction = easing
+            };
+
+            Storyboard.SetTarget(fade, block);
+            Storyboard.SetTargetProperty(fade, "Opacity");
+            Storyboard.SetTarget(slide, block);
+            Storyboard.SetTargetProperty(slide, "(UIElement.RenderTransform).(TranslateTransform.Y)");
+
+            var storyboard = new Storyboard();
+            storyboard.Children.Add(fade);
+            storyboard.Children.Add(slide);
+            storyboard.Begin();
+        }
+
+        private static void FadeIn(Windows.UI.Xaml.UIElement element, double fromOpacity, double toOpacity, uint milliseconds = 280)
+        {
+            if (element == null)
+            {
+                return;
+            }
+
+            element.Opacity = fromOpacity;
+            var fade = new Windows.UI.Xaml.Media.Animation.DoubleAnimation
+            {
+                From = fromOpacity,
+                To = toOpacity,
+                Duration = new Duration(TimeSpan.FromMilliseconds(milliseconds)),
+                EasingFunction = new Windows.UI.Xaml.Media.Animation.CubicEase { EasingMode = Windows.UI.Xaml.Media.Animation.EasingMode.EaseOut }
+            };
+            Storyboard.SetTarget(fade, element);
+            Storyboard.SetTargetProperty(fade, "Opacity");
+            var storyboard = new Storyboard();
+            storyboard.Children.Add(fade);
+            storyboard.Begin();
         }
 
         /// <summary>Writes the current line into the lyric text.</summary>

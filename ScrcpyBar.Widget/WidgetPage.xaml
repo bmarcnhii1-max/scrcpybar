@@ -195,19 +195,34 @@
                 <TextBlock x:Name="LyricPrev" Text="" FontSize="12" Foreground="#4B5563"
                            TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"
                            HorizontalAlignment="Center" TextAlignment="Center" Opacity="0.6"
-                           Tapped="LyricPrev_Tapped" ToolTipService.ToolTip="Нажми — перейти к этой строке"/>
+                           Tapped="LyricPrev_Tapped" ToolTipService.ToolTip="Нажми — перейти к этой строке"
+                           RenderTransformOrigin="0.5,0.5">
+                    <TextBlock.RenderTransform>
+                        <TranslateTransform/>
+                    </TextBlock.RenderTransform>
+                </TextBlock>
 
                 <!-- The current line is simply bright, the ones around it are dim. The line
                      changes as the song plays, which is the sync - no sweeping highlight. -->
                 <TextBlock x:Name="LyricCur" Text="" FontSize="19" FontWeight="Bold"
                            TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis"
                            HorizontalAlignment="Center" TextAlignment="Center" Foreground="#F9FAFB"
-                           Tapped="LyricCur_Tapped" ToolTipService.ToolTip="Нажми — перейти к этой строке"/>
+                           Tapped="LyricCur_Tapped" ToolTipService.ToolTip="Нажми — перейти к этой строке"
+                           RenderTransformOrigin="0.5,0.5">
+                    <TextBlock.RenderTransform>
+                        <TranslateTransform/>
+                    </TextBlock.RenderTransform>
+                </TextBlock>
 
                 <TextBlock x:Name="LyricNext" Text="" FontSize="12" Foreground="#4B5563"
                            TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"
                            HorizontalAlignment="Center" TextAlignment="Center" Opacity="0.45"
-                           Tapped="LyricNext_Tapped" ToolTipService.ToolTip="Нажми — перейти к этой строке"/>
+                           Tapped="LyricNext_Tapped" ToolTipService.ToolTip="Нажми — перейти к этой строке"
+                           RenderTransformOrigin="0.5,0.5">
+                    <TextBlock.RenderTransform>
+                        <TranslateTransform/>
+                    </TextBlock.RenderTransform>
+                </TextBlock>
             </StackPanel>
         </Grid>
 

@@ -182,37 +182,56 @@ public class LyricsService
     {
         int durationSeconds = durationMs > 0 ? (int)(durationMs / 1000) : 0;
 
-        // Exact match first, with the duration so the right version of a cover is preferred.
-        string direct = $"/get?artist_name={Uri.EscapeDataString(artist)}&track_name={Uri.EscapeDataString(title)}";
+        // 1. Exact match with the duration, so the right version of a cover is preferred.
+        // 2. Exact match without it: the phone-reported duration is regularly off by a few
+        //    seconds, and /get with a wrong duration answers 404 even though the track exists.
+        //    This single retry recovers most of the "слова не найдены" cases.
         if (durationSeconds > 0)
         {
-            direct += $"&duration={durationSeconds}";
+            var (okDated, datedResult) = await GetJsonAsync(
+                $"/get?artist_name={Uri.EscapeDataString(artist)}&track_name={Uri.EscapeDataString(title)}&duration={durationSeconds}");
+            if (okDated)
+            {
+                return FromJson(datedResult, "lrclib:get");
+            }
+            if (DateTime.UtcNow < _serviceUnavailableUntil)
+            {
+                return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
+            }
         }
 
-        var (directOk, directResult) = await GetJsonAsync(direct);
+        var (directOk, directResult) = await GetJsonAsync(
+            $"/get?artist_name={Uri.EscapeDataString(artist)}&track_name={Uri.EscapeDataString(title)}");
         if (directOk)
         {
             return FromJson(directResult, "lrclib:get");
         }
-
-        // A throttled lrclib reported as "nothing found" would poison the cache, so the
-        // pause set by GetJsonAsync has to be surfaced here as well.
         if (DateTime.UtcNow < _serviceUnavailableUntil)
         {
             return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
         }
 
-        // Fall back to the search endpoint and pick the closest match that has timed lyrics.
-        string search = $"/search?track_name={Uri.EscapeDataString(title)}&artist_name={Uri.EscapeDataString(artist)}";
-        var (searchOk, searchResult) = await GetJsonAsync(search);
+        // 3. Search with both names, then 4. with the track alone: artist tags are often
+        //    "Various Artists", a feat. list or a localized spelling the search cannot match.
+        string trackQuery = Uri.EscapeDataString(title);
+        string artistQuery = Uri.EscapeDataString(artist);
+        var (searchOk, searchResult) = await GetJsonAsync(
+            $"/search?track_name={trackQuery}&artist_name={artistQuery}");
+        if (searchOk && searchResult.ValueKind != JsonValueKind.Array)
+        {
+            searchOk = false;
+        }
+        if (!searchOk && DateTime.UtcNow >= _serviceUnavailableUntil)
+        {
+            (searchOk, searchResult) = await GetJsonAsync($"/search?q={trackQuery}");
+            if (searchOk && searchResult.ValueKind != JsonValueKind.Array)
+            {
+                searchOk = false;
+            }
+        }
         if (!searchOk || DateTime.UtcNow < _serviceUnavailableUntil)
         {
             return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
-        }
-
-        if (searchResult.ValueKind != JsonValueKind.Array)
-        {
-            return new LyricsResult(false, false, "", new List<LyricLine>(), "not-found");
         }
 
         JsonElement best = default;
@@ -245,6 +264,11 @@ public class LyricsService
                 score += Math.Max(0, 300 - delta);
             }
 
+            // Search results for the track-only query can carry unrelated artists; name
+            // similarity keeps the right performer on top.
+            score += NameSimilarity(item, "artistName", artist) * 2;
+            score += NameSimilarity(item, "trackName", title);
+
             if (score > bestScore)
             {
                 bestScore = score;
@@ -256,6 +280,32 @@ public class LyricsService
         return hasBest
             ? FromJson(best, "lrclib:search")
             : new LyricsResult(false, false, "", new List<LyricLine>(), "not-found");
+    }
+
+    /// <summary>0..100 token-overlap score between a search result field and the query.</summary>
+    private static int NameSimilarity(JsonElement item, string field, string query)
+    {
+        if (!item.TryGetProperty(field, out var value) || value.ValueKind != JsonValueKind.String)
+        {
+            return 0;
+        }
+
+        string a = Clean(value.GetString() ?? "");
+        string b = Clean(query);
+        if (a.Length == 0 || b.Length == 0)
+        {
+            return 0;
+        }
+
+        var left = a.Split(' ').Where(t => t.Length > 1).ToHashSet();
+        var right = b.Split(' ').Where(t => t.Length > 1).ToList();
+        if (left.Count == 0 || right.Count == 0)
+        {
+            return a.Equals(b, StringComparison.OrdinalIgnoreCase) ? 100 : 0;
+        }
+
+        int shared = right.Count(left.Contains);
+        return (int)(100.0 * shared / Math.Max(left.Count, right.Count));
     }
 
     private async Task<(bool Ok, JsonElement Element)> GetJsonAsync(string path)
