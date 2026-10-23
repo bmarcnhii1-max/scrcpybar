@@ -371,7 +371,19 @@ namespace ScrcpyBar.Widget
             string requestedKey = _lyricsKey;
             try
             {
-                string payload = await GetUtf8StringAsync(_lyricsHttp, $"{BaseApi}/api/lyrics");
+                // Scoped to the exact track the widget shows: right after a track switch the
+                // bridge's "now playing" can still be the previous song.
+                var query = new System.Text.StringBuilder("?t=").Append(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                if (requestedKey.Length > 0)
+                {
+                    query.Append("&title=").Append(Uri.EscapeDataString(_currentTitle));
+                    query.Append("&artist=").Append(Uri.EscapeDataString(_currentArtist));
+                    if (_durationSeconds > 0)
+                    {
+                        query.Append("&durationMs=").Append((long)Math.Round(_durationSeconds * 1000));
+                    }
+                }
+                string payload = await GetUtf8StringAsync(_lyricsHttp, $"{BaseApi}/api/lyrics{query}");
                 if (!JsonObject.TryParse(payload, out JsonObject json))
                 {
                     LyricsStatus.Text = "Слова недоступны";

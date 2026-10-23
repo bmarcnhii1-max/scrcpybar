@@ -174,9 +174,22 @@ app.MapGet("/api/cover", async (AdbService adb) =>
     return Results.File(track.AlbumArtPath, contentType);
 });
 
-app.MapGet("/api/lyrics", async (AdbService adb, LyricsService lyrics, bool? refresh) =>
+app.MapGet("/api/lyrics", async (AdbService adb, LyricsService lyrics, bool? refresh, string? title, string? artist, long? durationMs) =>
 {
-    var track = await adb.GetNowPlayingAsync();
+    // The widget sends the track it is showing: at a track switch the bridge's cached
+    // "now playing" can still be the previous song, and unscoped lookups returned lyrics
+    // of the wrong track with a "not found" status.
+    TrackInfo track;
+    if (!string.IsNullOrWhiteSpace(title))
+    {
+        track = await adb.GetNowPlayingAsync();
+        track = track with { Title = title, Artist = artist ?? track.Artist, DurationMs = durationMs ?? track.DurationMs };
+    }
+    else
+    {
+        track = await adb.GetNowPlayingAsync();
+    }
+
     if (!track.HasTrack || string.IsNullOrWhiteSpace(track.Title))
     {
         return Results.Ok(new { ok = false, reason = "no track", lines = Array.Empty<object>() });

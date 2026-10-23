@@ -443,6 +443,9 @@ public class LyricsService
             _unavailableStrikes++;
             double seconds = 30.0 * Math.Pow(2, Math.Min(_unavailableStrikes - 1, 6));
             _serviceUnavailableUntil = DateTime.UtcNow + TimeSpan.FromSeconds(Math.Min(seconds, 30.0 * 60.0));
+            _logger.LogWarning(
+                "lrclib unavailable via exception ({Status}), pausing for {Seconds}s (strike {Strike})",
+                ex.StatusCode, seconds, _unavailableStrikes);
             return (false, default);
         }
         catch (Exception ex)
