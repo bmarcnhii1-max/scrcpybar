@@ -42,9 +42,11 @@ self-contained exe, внутри него .NET 8, виджет, companion и в�
 <details>
 <summary><b>Скриншот / гифка</b></summary>
 
-<!-- TODO: скрин -->
-
-<img src="docs/screenshot.png" alt="ScrcpyBar widget in Xbox Game Bar">
+<p>
+  <img src="docs/screenshot.png" width="49%" alt="ScrcpyBar widget — плеер">
+  <img src="docs/screenshot-lyrics.png" width="49%" alt="ScrcpyBar widget — синхронный текст песни">
+</p>
+<p align="center"><sub>Слева — плеер с обложкой и управлением телефоном. Справа — караоке-текст от lrclib.net с подсветкой текущей строки.</sub></p>
 
 </details>
 
