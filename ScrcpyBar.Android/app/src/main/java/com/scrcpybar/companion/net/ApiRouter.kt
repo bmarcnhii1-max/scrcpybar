@@ -194,12 +194,9 @@ class ApiRouter(
  */
     private fun artworkUrlFor(snapshot: MediaSnapshot): String? {
         val base = NetworkUtils.baseUrl(context, prefs.advertisedPort) ?: return null
-        val query = "packageName=${snapshot.packageName}"
-        return if (prefs.authEnabled) {
-            "$base/artwork?$query&token=${prefs.token}"
-        } else {
-            "$base/artwork?$query"
-        }
+        // The token deliberately stays out of the URL: query strings leak into logs and
+        // intermediaries. Authenticated consumers send the Bearer header themselves.
+        return "$base/artwork?packageName=${snapshot.packageName}"
     }
 
     private fun error(status: Int, message: String, supported: List<String> = emptyList()): HttpResponse =

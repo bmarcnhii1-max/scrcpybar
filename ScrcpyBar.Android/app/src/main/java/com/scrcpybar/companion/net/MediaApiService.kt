@@ -30,6 +30,8 @@ class MediaApiService : Service() {
 
     private lateinit var prefs: Prefs
     private var server: MiniHttpServer? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var bindRetry: Runnable? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -91,10 +93,12 @@ class MediaApiService : Service() {
     }
 
     private fun scheduleBindRetry() {
-        val handler = Handler(Looper.getMainLooper())
         var attempt = 0
         val retry = object : Runnable {
             override fun run() {
+                // A stopped service must stay stopped: without this guard a pending retry
+                // would resurrect the server after the user pressed "stop" in the notification.
+                if (server == null) return
                 if (server?.isRunning == true) return
                 attempt++
                 if (attempt > BIND_RETRY_LIMIT) {
@@ -103,14 +107,17 @@ class MediaApiService : Service() {
                 }
                 startEverything()
                 if (server?.isRunning != true) {
-                    handler.postDelayed(this, BIND_RETRY_DELAY_MS)
+                    mainHandler.postDelayed(this, BIND_RETRY_DELAY_MS)
                 }
             }
         }
-        handler.postDelayed(retry, BIND_RETRY_DELAY_MS)
+        bindRetry = retry
+        mainHandler.postDelayed(retry, BIND_RETRY_DELAY_MS)
     }
 
     private fun stopEverything() {
+        bindRetry?.let { mainHandler.removeCallbacks(it) }
+        bindRetry = null
         server?.stop()
         server = null
         MiniHttpServerHolder.current = null

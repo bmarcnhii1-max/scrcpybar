@@ -95,8 +95,21 @@ public class SmtcSyncService : IHostedService
                         }
                     }
 
+                    var seekLogPath = Path.Combine(AppPaths.EnsureDataDir(), "smtc_seek.log");
+                    // Rotate: this diagnostics log is append-only and would grow forever.
+                    try
+                    {
+                        var seekLog = new FileInfo(seekLogPath);
+                        if (seekLog.Exists && seekLog.Length > 1_000_000)
+                        {
+                            seekLog.Delete();
+                        }
+                    }
+                    catch
+                    {
+                    }
                     File.AppendAllText(
-                        Path.Combine(AppPaths.EnsureDataDir(), "smtc_seek.log"),
+                        seekLogPath,
                         $"{DateTime.Now:O} requested={positionMs} current={track.PositionMs} duration={durationMs} applied={applied}{Environment.NewLine}");
                 }
                 catch (Exception ex)

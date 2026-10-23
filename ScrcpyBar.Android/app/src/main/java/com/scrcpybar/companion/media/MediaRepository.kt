@@ -235,7 +235,9 @@ class MediaRepository private constructor(private val appContext: Context) {
 
         val elapsed = SystemClock.elapsedRealtime() - state.lastPositionUpdateTime
         if (elapsed < 0L) return base
-        return base + elapsed
+        // Position advances at the playback rate: at 2x speed one wall-clock second moves
+        // the playhead two seconds.
+        return base + (elapsed * state.playbackSpeed).toLong()
     }
 
     /**

@@ -122,6 +122,18 @@ public class LyricsService
             // widget have to retry once the pause expires.
             if (fetched.Source != "unavailable")
             {
+                if (_memory.Count > 500)
+                {
+                    // Drop the negative entries first: found lyrics are cheap to re-read from disk.
+                    foreach (var stale in _memory.Where(kv => !kv.Value.Result.Found).Select(kv => kv.Key).ToList())
+                    {
+                        _memory.Remove(stale);
+                    }
+                    if (_memory.Count > 500)
+                    {
+                        _memory.Clear();
+                    }
+                }
                 _memory[key] = new CachedLyrics(fetched, DateTime.UtcNow);
             }
 
@@ -445,7 +457,11 @@ public class LyricsService
     private static string BuildKey(string artist, string title)
     {
         string raw = $"{artist.ToLowerInvariant()}|{title.ToLowerInvariant()}";
-        return Math.Abs(raw.GetHashCode()).ToString("X8");
+        // string.GetHashCode() is randomized per process on .NET, so a hash-based cache file
+        // name would never match again after a restart. SHA-256 is stable across runs.
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        byte[] hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(raw));
+        return Convert.ToHexString(hash, 0, 4);
     }
 
     private static string CachePath(string key) =>

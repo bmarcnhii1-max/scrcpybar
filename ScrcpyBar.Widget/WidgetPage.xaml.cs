@@ -414,8 +414,8 @@ namespace ScrcpyBar.Widget
                 _lyrics.AddRange(parsed);
 
                 LyricsStatus.Text = synced
-                    ? "Синхронные слова В· lrclib.net"
-                    : "Слова песни В· lrclib.net";
+                    ? "Синхронные слова · lrclib.net"
+                    : "Слова песни · lrclib.net";
 
                 if (_lyrics.Count == 0)
                 {
@@ -707,7 +707,9 @@ namespace ScrcpyBar.Widget
                 var uri = new Uri($"{BaseApi}/api/seek-position?positionMs={positionMs}&durationMs={durationMs}");
                 using (var content = new StringContent(string.Empty))
                 {
-                    var response = await _http.PostAsync(uri, content);
+                    // _seekHttp has the 10s timeout: a seek can take far longer than the 2s
+                    // of the polling client, and a timeout here would hide an applied seek.
+                    var response = await _seekHttp.PostAsync(uri, content);
                     SeekLog.Write($"seek response status={(int)response.StatusCode}");
                     if (response.IsSuccessStatusCode)
                     {
@@ -737,6 +739,17 @@ namespace ScrcpyBar.Widget
                     var folder = Windows.Storage.ApplicationData.Current.LocalFolder;
                     var file = folder.CreateFileAsync(FileName, Windows.Storage.CreationCollisionOption.OpenIfExists)
                         .AsTask().GetAwaiter().GetResult();
+
+                    // Rotate like bridge.log does: an append-only diagnostics file would grow
+                    // forever on a machine that never clears app data.
+                    var props = file.GetBasicPropertiesAsync().AsTask().GetAwaiter().GetResult();
+                    if (props.Size > 1_000_000)
+                    {
+                        file.DeleteAsync(Windows.Storage.StorageDeleteOption.PermanentDelete)
+                            .AsTask().GetAwaiter().GetResult();
+                        file = folder.CreateFileAsync(FileName, Windows.Storage.CreationCollisionOption.OpenIfExists)
+                            .AsTask().GetAwaiter().GetResult();
+                    }
 
                     lock (Gate)
                     {

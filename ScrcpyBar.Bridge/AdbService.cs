@@ -117,7 +117,12 @@ public class AdbService
             process.Start();
             using var cts = new CancellationTokenSource(timeoutMs);
             var outputTask = process.StandardOutput.ReadToEndAsync(cts.Token);
+            // stderr has to be drained too: if the process writes a lot of it and nobody
+            // reads, the pipe fills up and adb deadlocks until the timeout.
+            var errorTask = process.StandardError.ReadToEndAsync(cts.Token);
             await process.WaitForExitAsync(cts.Token);
+            await outputTask;
+            await errorTask;
             return await outputTask;
         }
         catch (OperationCanceledException)
@@ -326,13 +331,18 @@ public class AdbService
     /// Makes sure the companion app is present on the selected phone. Without it the bridge
     /// falls back to parsing dumpsys, which is slower and cannot seek precisely.
     /// </summary>
+    private DateTime _companionSetupRetryAfter = DateTime.MinValue;
+
     private async Task EnsureCompanionInstalledAsync(string serial)
     {
         if (_companionSetupDoneFor == serial)
         {
             return;
         }
-        _companionSetupDoneFor = serial;
+        if (DateTime.UtcNow < _companionSetupRetryAfter && _companionSetupRetryFor == serial)
+        {
+            return;
+        }
 
         const string package = "com.scrcpybar.companion";
         const string listener = "com.scrcpybar.companion/com.scrcpybar.companion.media.ScrcpyMediaListenerService";
@@ -343,6 +353,7 @@ public class AdbService
             // Granting the notification listener access works over adb, which saves a manual trip
             // through the settings on every new phone.
             await RunAdbCommandAsync($"-s {serial} shell cmd notification allow_listener {listener}", 4000);
+            _companionSetupDoneFor = serial;
             return;
         }
 
@@ -350,6 +361,8 @@ public class AdbService
         if (apk == null)
         {
             _logger.LogWarning("Companion APK not found, cannot install it on {Serial}", serial);
+            _companionSetupRetryFor = serial;
+            _companionSetupRetryAfter = DateTime.UtcNow.AddSeconds(60);
             return;
         }
 
@@ -360,11 +373,17 @@ public class AdbService
             _logger.LogWarning(
                 "Could not install the companion on {Serial}: {Result}. Install the APK by hand or allow adb installs in the developer options.",
                 serial, install.Trim());
+            // Retry later: a manual install or a developer-options change should get another chance.
+            _companionSetupRetryFor = serial;
+            _companionSetupRetryAfter = DateTime.UtcNow.AddSeconds(60);
             return;
         }
 
         await RunAdbCommandAsync($"-s {serial} shell cmd notification allow_listener {listener}", 4000);
+        _companionSetupDoneFor = serial;
     }
+
+    private string _companionSetupRetryFor = "";
 
     /// <summary>Manual companion install from the first-run setup window. Returns a human-readable result.</summary>
     public async Task<string> SetupCompanionNowAsync()
@@ -724,6 +743,10 @@ public class AdbService
             long duration = ParseDurationFromSeekBar(xml);
             if (duration > 0)
             {
+                if (_durationCache.Count > 500)
+                {
+                    _durationCache.Clear();
+                }
                 _durationCache[key] = duration;
                 _lastKnownDurationMs = duration;
             }
@@ -752,13 +775,26 @@ public class AdbService
                 return 0;
             }
 
-            if (!int.TryParse(numbers[^2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int minutes) ||
-                !int.TryParse(numbers[^1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int seconds))
+            // The last group is either "M:SS" or "H:MM:SS" for tracks longer than an hour.
+            // Taking only the last two numbers would read "1:02:03" as 2:03.
+            if (numbers.Length >= 3 &&
+                int.TryParse(numbers[^3], NumberStyles.Integer, CultureInfo.InvariantCulture, out int hours))
+            {
+                if (!int.TryParse(numbers[^2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int minutes) ||
+                    !int.TryParse(numbers[^1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int seconds))
+                {
+                    return 0;
+                }
+                return Math.Max(0, (hours * 3600L) + (minutes * 60L) + seconds) * 1000L;
+            }
+
+            if (!int.TryParse(numbers[^2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int mins) ||
+                !int.TryParse(numbers[^1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int secs))
             {
                 return 0;
             }
 
-            return Math.Max(0, (minutes * 60L) + seconds) * 1000L;
+            return Math.Max(0, (mins * 60L) + secs) * 1000L;
         }
 
         private async Task<string> GetCompanionArtworkPathAsync(TrackInfo track)
@@ -772,7 +808,7 @@ public class AdbService
             {
                 string key = $"{track.PackageName}|{track.Title}|{track.Artist}";
                 string coverDirectory = AppPaths.DataSubDir("cover-cache");
-                string coverPath = Path.Combine(coverDirectory, $"{Math.Abs(key.GetHashCode()):X8}.jpg");
+                string coverPath = Path.Combine(coverDirectory, StableHash(key) + ".jpg");
                 if (File.Exists(coverPath))
                 {
                     return coverPath;
@@ -810,8 +846,8 @@ public class AdbService
             }
 
             string key = $"{track.PackageName}|{track.Title}|{track.Artist}";
-            string coverDirectory = Path.Combine(AppContext.BaseDirectory, "cover-cache");
-            string coverPath = Path.Combine(coverDirectory, $"{Math.Abs(key.GetHashCode()):X8}.png");
+            string coverDirectory = AppPaths.DataSubDir("cover-cache");
+            string coverPath = Path.Combine(coverDirectory, StableHash(key) + ".png");
             if (File.Exists(coverPath))
             {
                 return coverPath;
@@ -1082,6 +1118,17 @@ public class AdbService
         };
     }
 
+    /// <summary>
+    /// Deterministic file-name hash. string.GetHashCode() is randomized per process on .NET,
+    /// so cache files named with it never match again after a restart.
+    /// </summary>
+    private static string StableHash(string value)
+    {
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        byte[] hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(hash, 0, 4);
+    }
+
     private static string GetFriendlyAppName(string? pkg) => pkg switch
     {
         "com.google.android.apps.youtube.music" => "YouTube Music",
@@ -1152,7 +1199,7 @@ public class AdbService
         }
 
         string action = seconds > 0 ? "fast-forward" : "rewind";
-        await RunAdbCommandAsync($"shell cmd media_session dispatch {action}", 2000);
+        await RunAdbCommandAsync(Adb($"shell cmd media_session dispatch {action}"), 2000);
         _cachedInfo = null;
     }
 
@@ -1181,7 +1228,7 @@ public class AdbService
         var (left, top, right, bottom) = bounds.Value;
         int x = left + (int)Math.Round((right - left) * fraction);
         int y = top + ((bottom - top) / 2);
-        await RunAdbCommandAsync($"shell input tap {x} {y}", 2000);
+        await RunAdbCommandAsync(Adb($"shell input tap {x} {y}"), 2000);
         _cachedInfo = null;
         return true;
     }
@@ -1208,9 +1255,11 @@ public class AdbService
 
     public async Task VolumeUpAsync()
     {
-        // 1. Primary method: cmd audio adj-volume 3 RAISE
+        // 1. Primary method: cmd audio adj-volume 3 RAISE. An empty reply means the command
+        // succeeded silently — without this distinction the fallback below would fire too and
+        // the volume would jump two steps per click.
         var output = await RunAdbCommandAsync(Adb("shell cmd audio adj-volume 3 RAISE"), 2500);
-        if (string.IsNullOrWhiteSpace(output) || !output.Contains("adjustStreamVolume"))
+        if (!string.IsNullOrWhiteSpace(output) && !output.Contains("adjustStreamVolume"))
         {
             // 2. Hardware key fallback: KEYCODE_VOLUME_UP (24)
             await RunAdbCommandAsync(Adb("shell input keyevent 24"), 2500);
@@ -1222,7 +1271,7 @@ public class AdbService
     {
         // 1. Primary method: cmd audio adj-volume 3 LOWER
         var output = await RunAdbCommandAsync(Adb("shell cmd audio adj-volume 3 LOWER"), 2500);
-        if (string.IsNullOrWhiteSpace(output) || !output.Contains("adjustStreamVolume"))
+        if (!string.IsNullOrWhiteSpace(output) && !output.Contains("adjustStreamVolume"))
         {
             // 2. Hardware key fallback: KEYCODE_VOLUME_DOWN (25)
             await RunAdbCommandAsync(Adb("shell input keyevent 25"), 2500);
@@ -1233,10 +1282,10 @@ public class AdbService
     public async Task SetVolumeAsync(int volume)
     {
         volume = Math.Clamp(volume, 0, 15);
-        var output = await RunAdbCommandAsync($"shell cmd audio set-volume 3 {volume}", 2500);
-        if (string.IsNullOrWhiteSpace(output) || !output.Contains("setStreamVolume"))
+        var output = await RunAdbCommandAsync(Adb($"shell cmd audio set-volume 3 {volume}"), 2500);
+        if (!string.IsNullOrWhiteSpace(output) && !output.Contains("setStreamVolume"))
         {
-            await RunAdbCommandAsync($"shell cmd media_session volume --stream 3 --set {volume}", 2500);
+            await RunAdbCommandAsync(Adb($"shell cmd media_session volume --stream 3 --set {volume}"), 2500);
         }
         _cachedInfo = null;
     }
