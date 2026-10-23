@@ -202,17 +202,44 @@ public class LyricsService
     {
         int durationSeconds = durationMs > 0 ? (int)(durationMs / 1000) : 0;
 
-        // 1. Exact match with the duration, so the right version of a cover is preferred.
-        // 2. Exact match without it: the phone-reported duration is regularly off by a few
-        //    seconds, and /get with a wrong duration answers 404 even though the track exists.
-        //    This single retry recovers most of the "слова не найдены" cases.
+        // 1-2. Exact /get matches. A plain-only hit is kept as a fallback, not returned
+        //      immediately: lrclib often hosts several entries per song and /get can land on
+        //      the one without synced lyrics while search finds synced versions of the same
+        //      track (real case: Anacondaz - "Мама, я люблю").
+        LyricsResult? plainFallback = null;
+
+        async Task<LyricsResult?> GetExactAsync(bool withDuration)
+        {
+            string path = $"/get?artist_name={Uri.EscapeDataString(artist)}&track_name={Uri.EscapeDataString(title)}";
+            if (withDuration && durationSeconds > 0)
+            {
+                path += $"&duration={durationSeconds}";
+            }
+            if (!withDuration && durationSeconds <= 0)
+            {
+                return null; // identical to the previous request
+            }
+
+            var (ok, result) = await GetJsonAsync(path);
+            if (!ok)
+            {
+                return null;
+            }
+            var parsed = FromJson(result, "lrclib:get");
+            if (parsed.Lines.Count > 0)
+            {
+                return parsed;
+            }
+            plainFallback = parsed;
+            return null;
+        }
+
         if (durationSeconds > 0)
         {
-            var (okDated, datedResult) = await GetJsonAsync(
-                $"/get?artist_name={Uri.EscapeDataString(artist)}&track_name={Uri.EscapeDataString(title)}&duration={durationSeconds}");
-            if (okDated)
+            var dated = await GetExactAsync(withDuration: true);
+            if (dated != null)
             {
-                return FromJson(datedResult, "lrclib:get");
+                return dated;
             }
             if (DateTime.UtcNow < _serviceUnavailableUntil)
             {
@@ -220,11 +247,10 @@ public class LyricsService
             }
         }
 
-        var (directOk, directResult) = await GetJsonAsync(
-            $"/get?artist_name={Uri.EscapeDataString(artist)}&track_name={Uri.EscapeDataString(title)}");
-        if (directOk)
+        var direct = await GetExactAsync(withDuration: false);
+        if (direct != null)
         {
-            return FromJson(directResult, "lrclib:get");
+            return direct;
         }
         if (DateTime.UtcNow < _serviceUnavailableUntil)
         {
@@ -252,9 +278,32 @@ public class LyricsService
                 searchOk = false;
             }
         }
-        if (!searchOk || DateTime.UtcNow < _serviceUnavailableUntil)
+
+        var best = PickBestSearchResult(searchOk ? searchResult : default, durationSeconds, title, artist);
+        if (best != null && best.Lines.Count > 0)
         {
-            return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
+            return best;
+        }
+        if (best != null)
+        {
+            plainFallback ??= best;
+        }
+
+        // Nothing synced anywhere: a plain /get hit is still much better than nothing.
+        return plainFallback ??
+            new LyricsResult(false, false, "", new List<LyricLine>(), "not-found");
+    }
+
+    /// <summary>Picks the best search result, preferring synced lyrics, duration match and name similarity.</summary>
+    private LyricsResult? PickBestSearchResult(JsonElement searchResult, int durationSeconds, string title, string artist)
+    {
+        if (searchResult.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+        if (DateTime.UtcNow < _serviceUnavailableUntil)
+        {
+            return null;
         }
 
         JsonElement best = default;
@@ -300,9 +349,7 @@ public class LyricsService
             }
         }
 
-        return hasBest
-            ? FromJson(best, "lrclib:search")
-            : new LyricsResult(false, false, "", new List<LyricLine>(), "not-found");
+        return hasBest ? FromJson(best, "lrclib:search") : null;
     }
 
     /// <summary>0..100 token-overlap score between a search result field and the query.</summary>
