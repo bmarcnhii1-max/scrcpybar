@@ -8,7 +8,11 @@
 |---|---|
 | Companion (APK) | `cd ScrcpyBar.Android && gradlew.bat assembleDebug` |
 | Виджет (MSIX) | `powershell -ExecutionPolicy Bypass -File .\rebuild_and_deploy.ps1` |
-| Bridge (EXE) | `dotnet publish ScrcpyBar.Bridge -c Release -r win-x64` |
+| Bridge (EXE) | `dotnet publish ScrcpyBar.Bridge -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true /p:EnableCompressionInSingleFile=true` |
+
+> Флаги single-file обязательны: без них получится каркасный exe на 0.1 МБ без
+> рантайма. В самом `.csproj` их специально нет — иначе обычный `dotnet build`
+> складывает сборку в побочную папку `win-x64\` и легко запустить устаревший exe.
 
 Скрипт `rebuild_and_deploy.ps1` собирает виджет, регистрирует пакет и выдаёт
 loopback-exemption. Готовые артефакты кладутся в `build/` — именно они и публикуются
@@ -43,7 +47,7 @@ build/                     готовые артефакты релиза
 |---|---|---|
 | `GET` | `/api/track` | Трек, позиция, длительность, обложка |
 | `GET` | `/api/cover` | Обложка (JPEG/PNG) |
-| `GET` | `/api/lyrics` | Слова песни (`linesText` — `timeMs<TAB>текст`) |
+| `GET` | `/api/lyrics` | Слова песни (`linesText` — `timeMs<TAB>текст`, `version` — метка версии вида `(Clean)`, если lrclib отдал не основной вариант) |
 | `POST` | `/api/play-pause` | Пауза / воспроизведение |
 | `POST` | `/api/next` · `/api/prev` | Следующий / предыдущий трек |
 | `POST` | `/api/seek?seconds=±N` | Перемотка относительно (шаг ±300 с) |

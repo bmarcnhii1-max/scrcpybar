@@ -22,7 +22,8 @@ public record LyricsResult(
     bool Instrumental,
     string Plain,
     List<LyricLine> Lines,
-    string Source);
+    string Source,
+    string Version = "");
 
 /// <summary>
 /// Fetches synchronised lyrics from lrclib.net and caches them on disk.
@@ -70,15 +71,19 @@ public class LyricsService
     /// </summary>
     public async Task<LyricsResult> GetAsync(string title, string artist, long durationMs, bool forceRefresh = false)
     {
-        string cleanTitle = Clean(title);
-        string cleanArtist = Clean(artist);
+        string rawTitle = (title ?? "").Trim();
+        string rawArtist = (artist ?? "").Trim();
+        string cleanTitle = Clean(rawTitle);
+        string cleanArtist = Clean(rawArtist);
 
         if (string.IsNullOrWhiteSpace(cleanTitle))
         {
             return new LyricsResult(false, false, "", new List<LyricLine>(), "none");
         }
 
-        string key = BuildKey(cleanArtist, cleanTitle);
+        // The key uses the raw names and the duration: "(Clean)" uploads and
+        // "speed up" versions carry different lyrics and must not share a cache entry.
+        string key = BuildKey(rawArtist, rawTitle, durationMs);
 
         // A failed lookup (throttle, network noise) may be retried after a while instead of
         // being stuck for as long as the track keeps playing.
@@ -136,7 +141,7 @@ public class LyricsService
                 _memory.Remove(key);
             }
 
-            var fetched = await FetchAsync(cleanTitle, cleanArtist, durationMs);
+            var fetched = await FetchAsync(rawTitle, rawArtist, cleanTitle, cleanArtist, durationMs);
 
             // A throttled lrclib must not be remembered as "no lyrics": the warmup and the
             // widget have to retry once the pause expires.
@@ -178,7 +183,7 @@ public class LyricsService
         }
     }
 
-    private async Task<LyricsResult> FetchAsync(string title, string artist, long durationMs)
+    private async Task<LyricsResult> FetchAsync(string rawTitle, string rawArtist, string title, string artist, long durationMs)
     {
         // Throttled: skip the network entirely so the warmup does not re-open the ban window.
         if (DateTime.UtcNow < _serviceUnavailableUntil)
@@ -188,17 +193,17 @@ public class LyricsService
 
         try
         {
-            return await FetchCoreAsync(title, artist, durationMs);
+            return await FetchCoreAsync(rawTitle, rawArtist, title, artist, durationMs);
         }
         catch (Exception ex)
         {
             // A malformed response must never bubble up as a failed request.
-            _logger.LogWarning("Lyrics lookup failed for '{Artist}' - '{Title}': {Message}", artist, title, ex.Message);
+            _logger.LogWarning("Lyrics lookup failed for '{Artist}' - '{Title}': {Message}", rawArtist, rawTitle, ex.Message);
             return new LyricsResult(false, false, "", new List<LyricLine>(), "error");
         }
     }
 
-    private async Task<LyricsResult> FetchCoreAsync(string title, string artist, long durationMs)
+    private async Task<LyricsResult> FetchCoreAsync(string rawTitle, string rawArtist, string title, string artist, long durationMs)
     {
         int durationSeconds = durationMs > 0 ? (int)(durationMs / 1000) : 0;
 
@@ -279,7 +284,7 @@ public class LyricsService
             }
         }
 
-        var best = PickBestSearchResult(searchOk ? searchResult : default, durationSeconds, title, artist);
+        var best = PickBestSearchResult(searchOk ? searchResult : default, durationSeconds, rawTitle, rawArtist, title, artist);
         if (best != null && best.Lines.Count > 0)
         {
             return best;
@@ -294,8 +299,12 @@ public class LyricsService
             new LyricsResult(false, false, "", new List<LyricLine>(), "not-found");
     }
 
-    /// <summary>Picks the best search result, preferring synced lyrics, duration match and name similarity.</summary>
-    private LyricsResult? PickBestSearchResult(JsonElement searchResult, int durationSeconds, string title, string artist)
+    /// <summary>
+    /// Picks the best search result. Versions of one song ("(Clean)", "(Paused)", "speed up")
+    /// carry different lyrics, so besides synced lyrics and duration the raw title markers
+    /// decide: a candidate with markers the query lacks is a different version, not a match.
+    /// </summary>
+    private LyricsResult? PickBestSearchResult(JsonElement searchResult, int durationSeconds, string rawTitle, string rawArtist, string title, string artist)
     {
         if (searchResult.ValueKind != JsonValueKind.Array)
         {
@@ -306,9 +315,13 @@ public class LyricsService
             return null;
         }
 
+        var queryMarkers = ExtractMarkers(rawTitle);
+
         JsonElement best = default;
         bool hasBest = false;
         int bestScore = int.MinValue;
+        int bestDelta = int.MaxValue;
+        int bestMarkerCount = int.MaxValue;
         foreach (var item in searchResult.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.Object)
@@ -328,22 +341,67 @@ public class LyricsService
             }
 
             int score = hasSynced ? 1000 : 0;
+            int delta = int.MaxValue;
             if (durationSeconds > 0 && item.TryGetProperty("duration", out var dur) && dur.ValueKind == JsonValueKind.Number)
             {
                 // lrclib reports the duration as a decimal, so GetInt32 would throw on "172.0".
                 int candidate = (int)Math.Round(dur.GetDouble());
-                int delta = Math.Abs(candidate - durationSeconds);
-                score += Math.Max(0, 300 - delta);
+                delta = Math.Abs(candidate - durationSeconds);
+                score += delta <= 2 ? 300
+                    : delta <= 3 ? 270
+                    : delta <= 5 ? 220
+                    : delta <= 8 ? 150
+                    : delta <= 15 ? 60
+                    : delta <= 30 ? 0
+                    : -300;
             }
 
             // Search results for the track-only query can carry unrelated artists; name
             // similarity keeps the right performer on top.
-            score += NameSimilarity(item, "artistName", artist) * 2;
-            score += NameSimilarity(item, "trackName", title);
+            score += NameSimilarity(item, "artistName", rawArtist) * 2;
+            score += NameSimilarity(item, "trackName", rawTitle);
 
-            if (score > bestScore)
+            // A "(Clean)" upload matched against an explicit query is a different text
+            // (masked words), not a slightly worse title. Same for "(Paused)", censored
+            // versions and the like; neutral markers (remaster, live) cost less.
+            string candidateRaw = item.TryGetProperty("trackName", out var tn) && tn.ValueKind == JsonValueKind.String
+                ? tn.GetString() ?? ""
+                : "";
+            if (Normalize(candidateRaw) == Normalize(rawTitle))
+            {
+                score += 200;
+            }
+            var candidateMarkers = ExtractMarkers(candidateRaw);
+            if (candidateMarkers.SetEquals(queryMarkers))
+            {
+                score += 150;
+            }
+            else
+            {
+                foreach (var marker in candidateMarkers)
+                {
+                    if (!queryMarkers.Contains(marker))
+                    {
+                        score -= IsContentMarker(marker) ? 600 : 250;
+                    }
+                }
+                foreach (var marker in queryMarkers)
+                {
+                    if (!candidateMarkers.Contains(marker))
+                    {
+                        score -= 150;
+                    }
+                }
+            }
+
+            int markerCount = candidateMarkers.Count;
+            if (score > bestScore ||
+                (score == bestScore && (delta < bestDelta ||
+                    (delta == bestDelta && markerCount < bestMarkerCount))))
             {
                 bestScore = score;
+                bestDelta = delta;
+                bestMarkerCount = markerCount;
                 best = item;
                 hasBest = true;
             }
@@ -353,15 +411,17 @@ public class LyricsService
     }
 
     /// <summary>0..100 token-overlap score between a search result field and the query.</summary>
-    private static int NameSimilarity(JsonElement item, string field, string query)
+    private static int NameSimilarity(JsonElement item, string field, string rawQuery)
     {
         if (!item.TryGetProperty(field, out var value) || value.ValueKind != JsonValueKind.String)
         {
             return 0;
         }
 
-        string a = Clean(value.GetString() ?? "");
-        string b = Clean(query);
+        // Normalize both sides: case, punctuation and yo/ye no longer split identical names
+        // ("Anacondaz" vs "AnacondaZ", "Мама," vs "Мама").
+        string a = Normalize(value.GetString() ?? "");
+        string b = Normalize(rawQuery);
         if (a.Length == 0 || b.Length == 0)
         {
             return 0;
@@ -371,11 +431,109 @@ public class LyricsService
         var right = b.Split(' ').Where(t => t.Length > 1).ToList();
         if (left.Count == 0 || right.Count == 0)
         {
-            return a.Equals(b, StringComparison.OrdinalIgnoreCase) ? 100 : 0;
+            return a.Equals(b, StringComparison.Ordinal) ? 100 : 0;
         }
 
         int shared = right.Count(left.Contains);
         return (int)(100.0 * shared / Math.Max(left.Count, right.Count));
+    }
+
+    /// <summary>Lowercase letters/digits words: "Мама, я люблю (Clean)" becomes "мама я люблю clean".</summary>
+    private static string Normalize(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return "";
+        }
+
+        string text = value.ToLowerInvariant().Replace('ё', 'е');
+        var builder = new StringBuilder(text.Length);
+        foreach (char c in text)
+        {
+            if (char.IsLetterOrDigit(c))
+            {
+                builder.Append(c);
+            }
+            else if (builder.Length > 0 && builder[builder.Length - 1] != ' ')
+            {
+                builder.Append(' ');
+            }
+        }
+        return builder.ToString().Trim();
+    }
+
+    /// <summary>Version markers from the raw title: "(Clean)" gives {"clean version", "clean"}.</summary>
+    private static HashSet<string> ExtractMarkers(string rawTitle)
+    {
+        var markers = new HashSet<string>(StringComparer.Ordinal);
+        if (string.IsNullOrEmpty(rawTitle))
+        {
+            return markers;
+        }
+
+        foreach (Match match in Regex.Matches(rawTitle, @"[\(\[](?<m>[^\)\]]+)[\)\]]"))
+        {
+            string inner = Normalize(match.Groups["m"].Value);
+            if (inner.Length == 0)
+            {
+                continue;
+            }
+            markers.Add(inner);
+            int space = inner.IndexOf(' ');
+            if (space > 0)
+            {
+                markers.Add(inner[..space]);
+            }
+        }
+        return markers;
+    }
+
+    /// <summary>Markers that change the lyrics text itself (masked words, cut lines).</summary>
+    private static bool IsContentMarker(string marker) =>
+        marker.Contains("clean", StringComparison.Ordinal) ||
+        marker.Contains("paus", StringComparison.Ordinal) ||
+        marker.Contains("censor", StringComparison.Ordinal) ||
+        marker.Contains("explicit", StringComparison.Ordinal) ||
+        marker.Contains("karaoke", StringComparison.Ordinal) ||
+        marker.Contains("instrumental", StringComparison.Ordinal);
+
+    /// <summary>Display label for the matched version, e.g. "(Clean)". Empty for plain titles.</summary>
+    private static string ExtractVersionLabel(JsonElement element)
+    {
+        // The marker can sit in the track name ("Мама, я люблю (Clean)") or only in the
+        // album ("Байки Инсайдера (Clean version)"): check both, track first.
+        string[] candidates =
+        {
+            element.TryGetProperty("trackName", out var trackName) && trackName.ValueKind == JsonValueKind.String
+                ? trackName.GetString() ?? ""
+                : "",
+            element.TryGetProperty("albumName", out var albumName) && albumName.ValueKind == JsonValueKind.String
+                ? albumName.GetString() ?? ""
+                : ""
+        };
+
+        foreach (string raw in candidates)
+        {
+            Match match = Regex.Match(raw, @"[\(\[](?<m>[^\)\]]+)[\)\]]");
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            string inner = match.Groups["m"].Value.Trim();
+            string lowered = inner.ToLowerInvariant();
+            if (lowered.Contains("clean") || lowered.Contains("paus") ||
+                lowered.Contains("speed") || lowered.Contains("slow") ||
+                lowered.Contains("nightcore") || lowered.Contains("remix") ||
+                lowered.Contains("cover") || lowered.Contains("live") ||
+                lowered.Contains("acoustic") || lowered.Contains("karaoke") ||
+                lowered.Contains("explicit") || lowered.Contains("edit") ||
+                lowered.Contains("version") || lowered.Contains("remaster"))
+            {
+                return "(" + inner + ")";
+            }
+        }
+        return "";
     }
 
     private async Task<(bool Ok, JsonElement Element)> GetJsonAsync(string path)
@@ -469,7 +627,7 @@ public class LyricsService
         var lines = ParseLrc(synced);
         bool found = lines.Count > 0 || !string.IsNullOrWhiteSpace(plain);
 
-        return new LyricsResult(found, instrumental, plain, lines, source);
+        return new LyricsResult(found, instrumental, plain, lines, source, ExtractVersionLabel(element));
     }
 
     private static LyricsResult ParseCached(string raw, string key)
@@ -589,9 +747,10 @@ public class LyricsService
         return text;
     }
 
-    private static string BuildKey(string artist, string title)
+    private static string BuildKey(string artist, string title, long durationMs)
     {
-        string raw = $"{artist.ToLowerInvariant()}|{title.ToLowerInvariant()}";
+        long seconds = durationMs > 0 ? durationMs / 1000L : 0;
+        string raw = $"{artist.ToLowerInvariant()}|{title.ToLowerInvariant()}|{seconds}";
         // string.GetHashCode() is randomized per process on .NET, so a hash-based cache file
         // name would never match again after a restart. SHA-256 is stable across runs.
         using var sha = System.Security.Cryptography.SHA256.Create();

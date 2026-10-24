@@ -395,19 +395,34 @@ namespace ScrcpyBar.Widget
                 bool instrumental = json.GetNamedBoolean("instrumental", false);
                 bool synced = json.GetNamedBoolean("synced", false);
                 string plain = json.GetNamedString("plain", "");
+                string version = json.GetNamedString("version", "");
                 _lyricsUnavailable = !found && !instrumental;
 
             if (instrumental)
             {
-                LyricsStatus.Text = "Инструментальная композиция";
-                SetCurrentLine("");
+                if (requestedKey == _lyricsKey)
+                {
+                    LyricsStatus.Text = "Инструментальная композиция";
+                    SetCurrentLine("");
+                }
+                else
+                {
+                    _lyricsFetchPending = true;
+                }
                 return;
             }
 
             if (!found)
             {
-                LyricsStatus.Text = "Слова не найдены";
-                SetCurrentLine("");
+                if (requestedKey == _lyricsKey)
+                {
+                    LyricsStatus.Text = "Слова не найдены";
+                    SetCurrentLine("");
+                }
+                else
+                {
+                    _lyricsFetchPending = true;
+                }
                 return;
             }
 
@@ -449,9 +464,12 @@ namespace ScrcpyBar.Widget
                 _lyrics.Clear();
                 _lyrics.AddRange(parsed);
 
+                // When lrclib serves a different cut of the song ("(Clean)", "(Paused)"),
+                // the label names it so a masked line is not a mystery.
+                string versionSuffix = string.IsNullOrEmpty(version) ? "" : " " + version;
                 LyricsStatus.Text = synced
-                    ? "Синхронные слова · lrclib.net"
-                    : "Слова песни · lrclib.net";
+                    ? "Синхронные слова" + versionSuffix + " · lrclib.net"
+                    : "Слова песни" + versionSuffix + " · lrclib.net";
 
                 if (_lyrics.Count == 0)
                 {
