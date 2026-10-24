@@ -418,6 +418,7 @@ async function loadLyrics() {
     }
 }
 const $ = id => document.getElementById(id);
+window.__lyrState = () => ({ idx: lyrIdx, follow: lyrFollow, lines: lyrLines.length });
 const fmt = ms => { if (!ms || ms < 0) ms = 0; const s = Math.floor(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
 const curPos = () => posMs + (isPlaying ? Date.now() - stampMs : 0);
 async function updateTrack() {

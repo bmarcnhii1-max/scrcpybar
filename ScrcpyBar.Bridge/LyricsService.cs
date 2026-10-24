@@ -86,6 +86,13 @@ public class LyricsService
     private sealed record CachedLyrics(LyricsResult Result, DateTime CachedAt);
 
     /// <summary>
+    /// Plain-only cache entries predate line estimation: they must be re-fetched
+    /// instead of served, otherwise the dashboard gets text it cannot follow.
+    /// </summary>
+    private static bool IsStalePlainCache(LyricsResult result) =>
+        result.Found && result.Lines.Count == 0 && !string.IsNullOrWhiteSpace(result.Plain);
+
+    /// <summary>
     /// Returns the lyrics for a track. The result is cached per artist/title, so repeated calls
     /// for the same song are free.
     /// </summary>
@@ -123,7 +130,8 @@ public class LyricsService
 
         if (!forceRefresh && _memory.TryGetValue(key, out var cached))
         {
-            if (cached.Result.Found || DateTime.UtcNow - cached.CachedAt < NegativeTtl)
+            if (!IsStalePlainCache(cached.Result) &&
+                (cached.Result.Found || DateTime.UtcNow - cached.CachedAt < NegativeTtl))
             {
                 return cached.Result;
             }
@@ -137,7 +145,7 @@ public class LyricsService
             {
                 string raw = await File.ReadAllTextAsync(cachePath);
                 var result = ParseCached(raw, key);
-                if (result.Found)
+                if (!IsStalePlainCache(result) && result.Found)
                 {
                     _memory[key] = new CachedLyrics(result, DateTime.UtcNow);
                     return result;
@@ -154,7 +162,8 @@ public class LyricsService
         {
             if (!forceRefresh && _memory.TryGetValue(key, out var afterLock))
             {
-                if (afterLock.Result.Found || DateTime.UtcNow - afterLock.CachedAt < NegativeTtl)
+                if (!IsStalePlainCache(afterLock.Result) &&
+                    (afterLock.Result.Found || DateTime.UtcNow - afterLock.CachedAt < NegativeTtl))
                 {
                     return afterLock.Result;
                 }
@@ -207,7 +216,8 @@ public class LyricsService
     {
         try
         {
-            return await FetchCoreAsync(rawTitle, rawArtist, title, artist, durationMs);
+            var core = await FetchCoreAsync(rawTitle, rawArtist, title, artist, durationMs);
+            return WithEstimatedTiming(core, durationMs > 0 ? (int)(durationMs / 1000) : 0);
         }
         catch (Exception ex)
         {
@@ -626,6 +636,41 @@ public class LyricsService
             }
         }
         return "";
+    }
+
+    /// <summary>
+    /// Guarantees followable timing: synced lines keep real words (or get evenly
+    /// spread estimates), and a plain-only hit is sliced into evenly spaced lines
+    /// across the track duration, then word-estimated. Only a truly empty result
+    /// (instrumental / not found) passes through untouched.
+    /// </summary>
+    internal static LyricsResult WithEstimatedTiming(LyricsResult result, int durationSeconds)
+    {
+        if (result.Lines.Count > 0)
+        {
+            return WithEstimatedWords(result, durationSeconds);
+        }
+        if (string.IsNullOrWhiteSpace(result.Plain))
+        {
+            return result;
+        }
+
+        var texts = result.Plain
+            .Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToList();
+        if (texts.Count == 0)
+        {
+            return result;
+        }
+
+        long total = durationSeconds > 0 ? durationSeconds * 1000L : texts.Count * 4000L;
+        long perLine = Math.Max(1500L, total / texts.Count);
+        var lines = texts
+            .Select((text, i) => new LyricLine(i * perLine, text, new List<LyricWord>()))
+            .ToList();
+        return WithEstimatedWords(result with { Lines = lines }, durationSeconds);
     }
 
     /// <summary>
