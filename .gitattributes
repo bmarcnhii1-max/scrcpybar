@@ -1,0 +1,6 @@
+*.keystore binary
+*.pfx binary
+*.pdb binary
+*.apk binary
+*.msix binary
+*.cer binary
