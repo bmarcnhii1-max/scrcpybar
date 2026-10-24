@@ -148,8 +148,8 @@ class MediaRepository private constructor(private val appContext: Context) {
                 "next" -> controls.skipToNext()
                 "previous" -> controls.skipToPrevious()
                 "stop" -> controls.stop()
-                "like" -> setHeart(controller, true)?.let { return it }
-                "unlike" -> setHeart(controller, false)?.let { return it }
+                "like" -> setLiked(controller, true)?.let { return it }
+                "unlike" -> setLiked(controller, false)?.let { return it }
                 "seek" -> {
                     val requested = action.positionMs
                         ?: return ControlResult.Failure(
@@ -172,17 +172,20 @@ class MediaRepository private constructor(private val appContext: Context) {
     // ---------------------------------------------------------------- internals
 
     /**
-     * Likes via MediaSession heart rating (YouTube Music and friends expose it).
-     * Returns null on success, a Failure when the player has no heart rating.
+     * Likes via the player's rating: heart where exposed, thumbs up/down otherwise
+     * (YouTube Music uses thumbs). Returns null on success, a Failure when the
+     * player has no rating at all.
      */
-    private fun setHeart(controller: MediaController, liked: Boolean): ControlResult? {
-        if (controller.ratingType != Rating.RATING_HEART) {
-            return ControlResult.Failure(
+    private fun setLiked(controller: MediaController, liked: Boolean): ControlResult? {
+        val rating = when (controller.ratingType) {
+            Rating.RATING_HEART -> Rating.newHeartRating(liked)
+            Rating.RATING_THUMB_UP_DOWN -> Rating.newThumbRating(liked)
+            else -> return ControlResult.Failure(
                 HttpErrors.BAD_REQUEST,
                 "rating is not supported by this player"
             )
         }
-        controller.transportControls.setRating(Rating.newHeartRating(liked))
+        controller.transportControls.setRating(rating)
         return null
     }
 
@@ -218,9 +221,12 @@ class MediaRepository private constructor(private val appContext: Context) {
 
         val ratingType = controller.ratingType
         val rating = metadata?.getRating(MediaMetadata.METADATA_KEY_RATING)
+        // Unrated but supported players report "not liked" so the button stays visible.
         val isLiked: Boolean? =
-            if (ratingType == Rating.RATING_HEART && rating?.isRated == true) rating.hasHeart()
-            else null
+            if (ratingType != Rating.RATING_HEART && ratingType != Rating.RATING_THUMB_UP_DOWN) null
+            else if (rating?.isRated != true) false
+            else if (ratingType == Rating.RATING_HEART) rating.hasHeart()
+            else rating.isThumbUp
 
         return MediaSnapshot(
             packageName = packageName,
