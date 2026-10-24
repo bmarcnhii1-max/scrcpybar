@@ -38,7 +38,9 @@ namespace ScrcpyBar.Widget
         private DateTime _coverAttemptedAt = DateTime.MinValue;
 
         // --- karaoke lyrics -------------------------------------------------
-        private readonly DispatcherTimer _karaokeTimer = new DispatcherTimer();
+        // The sweep is driven by CompositionTarget.Rendering (vsync) instead of a
+        // DispatcherTimer: the Game Bar host throttles UI timers, which made the
+        // fill crawl at a few fps. Rendering ticks at display rate while open.
         private readonly List<LyricLine> _lyrics = new List<LyricLine>();
         private bool _lyricsEnabled;
         private bool _lyricsLoading;
@@ -82,11 +84,11 @@ namespace ScrcpyBar.Widget
 
             _timer.Interval = TimeSpan.FromSeconds(1);
             _timer.Tick += async (s, e) => await FetchTrackAsync();
+        }
 
-            // The fill has to sweep smoothly, so the tick runs at 25 fps while the
-            // panel is open; each tick only resizes one clip rectangle.
-            _karaokeTimer.Interval = TimeSpan.FromMilliseconds(40);
-            _karaokeTimer.Tick += (s, e) => UpdateKaraoke();
+        private void OnCompositionRendering(object sender, object e)
+        {
+            UpdateKaraoke();
         }
 
         protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -97,10 +99,7 @@ namespace ScrcpyBar.Widget
             }
 
             _timer.Start();
-            if (_lyricsEnabled)
-            {
-                _karaokeTimer.Start();
-            }
+            CompositionTarget.Rendering += OnCompositionRendering;
             _ = FetchTrackAsync();
             // The bridge may have resolved the lyrics since the last attempt (restart, backoff
             // expired), so opening the panel re-asks instead of sticking to the old failure.
@@ -113,7 +112,7 @@ namespace ScrcpyBar.Widget
         protected override void OnNavigatedFrom(NavigationEventArgs e)
         {
             _timer.Stop();
-            _karaokeTimer.Stop();
+            CompositionTarget.Rendering -= OnCompositionRendering;
         }
 
         private async Task FetchTrackAsync()
@@ -328,14 +327,8 @@ namespace ScrcpyBar.Widget
 
             if (_lyricsEnabled)
             {
-                _karaokeTimer.Start();
                 TrackLyricsKey(!string.IsNullOrWhiteSpace(_currentTitle), _currentTitle, _currentArtist);
                 UpdateKaraoke();
-            }
-            else
-            {
-                // Nothing to animate while the panel is closed.
-                _karaokeTimer.Stop();
             }
         }
 
