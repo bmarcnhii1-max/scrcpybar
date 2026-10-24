@@ -94,8 +94,6 @@ class ApiRouter(
         return HttpResponse.json(HttpResponse.OK, payload, NO_CACHE)
     }
 
-    private fun sessions(request: HttpRequest): HttpResponse {
-
     private fun facts(request: HttpRequest): HttpResponse {
         if (!authorized(request)) return unauthorized()
 
