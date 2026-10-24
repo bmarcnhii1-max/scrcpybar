@@ -59,6 +59,9 @@ public class LyricsService
     {
         ["lrclib"] = new(),
         ["better-lyrics"] = new(),
+        ["lrc.red"] = new(),
+        ["lrcmux"] = new(),
+        ["synclrc"] = new(),
     };
     private readonly Dictionary<string, DateTime> _lastAttemptAt = new(StringComparer.Ordinal);
 
@@ -73,6 +76,8 @@ public class LyricsService
             Timeout = TimeSpan.FromSeconds(12)
         };
         _http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", UserAgent);
+        // Registered client-side application: public ID, ~180 req/min instead of ~90.
+        _http.DefaultRequestHeaders.TryAddWithoutValidation("Lrclib-App-Id", "OQ87dX1cjpMAwrw4qnYjVDJ0lOhsjTXhbohNQVmH_Jk");
     }
 
     private sealed record CachedLyrics(LyricsResult Result, DateTime CachedAt);
@@ -213,117 +218,157 @@ public class LyricsService
     {
         int durationSeconds = durationMs > 0 ? (int)(durationMs / 1000) : 0;
 
-        // 0. better-lyrics first: its catalog (lrc.red by ISRC + upstream) is a superset of
-        //    lrclib's, cache hits are keyless and generous, and TTML carries syllable timing.
-        //    Anything it cannot serve (401/404/empty) falls through to lrclib below.
-        var better = await FetchBetterLyricsAsync(rawTitle, rawArtist, durationSeconds);
-        if (better != null)
+        // Every provider is tried in a random order on each lookup, so no single backend
+        // takes the whole load and a throttled one does not block the rest. The first
+        // provider with synced lines wins; a plain-only hit is kept as a last resort.
+        // A paused provider reports "unavailable" instead of failing the lookup.
+        async Task<LyricsResult?> FetchLrclibAsync()
         {
-            if (better.Found)
+            // 1-2. Exact /get matches. A plain-only hit is kept as a fallback, not returned
+            //      immediately: lrclib often hosts several entries per song and /get can land on
+            //      the one without synced lyrics while search finds synced versions of the same
+            //      track (real case: Anacondaz - "Мама, я люблю").
+            LyricsResult? plainFallback = null;
+
+            async Task<LyricsResult?> GetExactAsync(bool withDuration)
             {
-                return better;
-            }
-            if (better.Source == "unavailable")
-            {
-                // better-lyrics is throttled, but lrclib is a different backend and may answer.
-                // Only give up early when lrclib is paused too.
-                if (IsPaused("lrclib"))
+                string path = $"/get?artist_name={Uri.EscapeDataString(artist)}&track_name={Uri.EscapeDataString(title)}";
+                if (withDuration && durationSeconds > 0)
                 {
-                    return better;
+                    path += $"&duration={durationSeconds}";
                 }
-            }
-        }
+                if (!withDuration && durationSeconds <= 0)
+                {
+                    return null; // identical to the previous request
+                }
 
-        // 1-2. Exact /get matches. A plain-only hit is kept as a fallback, not returned
-        //      immediately: lrclib often hosts several entries per song and /get can land on
-        //      the one without synced lyrics while search finds synced versions of the same
-        //      track (real case: Anacondaz - "Мама, я люблю").
-        LyricsResult? plainFallback = null;
-
-        async Task<LyricsResult?> GetExactAsync(bool withDuration)
-        {
-            string path = $"/get?artist_name={Uri.EscapeDataString(artist)}&track_name={Uri.EscapeDataString(title)}";
-            if (withDuration && durationSeconds > 0)
-            {
-                path += $"&duration={durationSeconds}";
-            }
-            if (!withDuration && durationSeconds <= 0)
-            {
-                return null; // identical to the previous request
-            }
-
-            var (ok, result) = await GetJsonAsync("lrclib", LrclibApiBase + path);
-            if (!ok)
-            {
+                var (ok, result) = await GetJsonAsync("lrclib", LrclibApiBase + path);
+                if (!ok)
+                {
+                    return null;
+                }
+                var parsed = FromJson(result, "lrclib");
+                if (parsed.Lines.Count > 0)
+                {
+                    return parsed;
+                }
+                plainFallback = parsed;
                 return null;
             }
-            var parsed = FromJson(result, "lrclib");
-            if (parsed.Lines.Count > 0)
-            {
-                return parsed;
-            }
-            plainFallback = parsed;
-            return null;
-        }
 
-        if (durationSeconds > 0)
-        {
-            var dated = await GetExactAsync(withDuration: true);
-            if (dated != null)
+            if (durationSeconds > 0)
             {
-                return dated;
+                var dated = await GetExactAsync(withDuration: true);
+                if (dated != null)
+                {
+                    return dated;
+                }
+                if (IsPaused("lrclib"))
+                {
+                    return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
+                }
+            }
+
+            var direct = await GetExactAsync(withDuration: false);
+            if (direct != null)
+            {
+                return direct;
             }
             if (IsPaused("lrclib"))
             {
                 return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
             }
-        }
 
-        var direct = await GetExactAsync(withDuration: false);
-        if (direct != null)
-        {
-            return direct;
-        }
-        if (IsPaused("lrclib"))
-        {
-            return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
-        }
-
-        // 3. Search with both names, then 4. with the track alone: artist tags are often
-        //    "Various Artists", a feat. list or a localized spelling the search cannot match
-        //    (YouTube Music says "Anacon-daz", lrclib lists "Anacondaz"). An empty artist-scoped
-        //    result counts as a failure and still opens the track-only fallback.
-        string trackQuery = Uri.EscapeDataString(title);
-        string artistQuery = Uri.EscapeDataString(artist);
-        var (searchOk, searchResult) = await GetJsonAsync("lrclib",
-            LrclibApiBase + $"/search?track_name={trackQuery}&artist_name={artistQuery}");
-        if (!searchOk || searchResult.ValueKind != JsonValueKind.Array ||
-            !searchResult.EnumerateArray().Any())
-        {
-            searchOk = false;
-        }
-        if (!searchOk && !IsPaused("lrclib"))
-        {
-            (searchOk, searchResult) = await GetJsonAsync("lrclib", LrclibApiBase + $"/search?q={trackQuery}");
-            if (!searchOk || searchResult.ValueKind != JsonValueKind.Array)
+            // 3. Search with both names, then 4. with the track alone: artist tags are often
+            //    "Various Artists", a feat. list or a localized spelling the search cannot match
+            //    (YouTube Music says "Anacon-daz", lrclib lists "Anacondaz"). An empty artist-scoped
+            //    result counts as a failure and still opens the track-only fallback.
+            string trackQuery = Uri.EscapeDataString(title);
+            string artistQuery = Uri.EscapeDataString(artist);
+            var (searchOk, searchResult) = await GetJsonAsync("lrclib",
+                LrclibApiBase + $"/search?track_name={trackQuery}&artist_name={artistQuery}");
+            if (!searchOk || searchResult.ValueKind != JsonValueKind.Array ||
+                !searchResult.EnumerateArray().Any())
             {
                 searchOk = false;
             }
+            if (!searchOk && !IsPaused("lrclib"))
+            {
+                (searchOk, searchResult) = await GetJsonAsync("lrclib", LrclibApiBase + $"/search?q={trackQuery}");
+                if (!searchOk || searchResult.ValueKind != JsonValueKind.Array)
+                {
+                    searchOk = false;
+                }
+            }
+
+            var best = PickBestSearchResult(searchOk ? searchResult : default, durationSeconds, rawTitle, rawArtist, title, artist);
+            if (best != null && best.Lines.Count > 0)
+            {
+                return best;
+            }
+            if (best != null)
+            {
+                plainFallback ??= best;
+            }
+
+            // Nothing synced here: a plain hit counts as a fallback, otherwise let the
+            // other providers try.
+            return plainFallback;
         }
 
-        var best = PickBestSearchResult(searchOk ? searchResult : default, durationSeconds, rawTitle, rawArtist, title, artist);
-        if (best != null && best.Lines.Count > 0)
+        var providers = new List<Func<Task<LyricsResult?>>>
         {
-            return best;
-        }
-        if (best != null)
+            () => FetchLrcredAsync(rawTitle, rawArtist, title, artist, durationSeconds),
+            () => FetchBetterLyricsAsync(rawTitle, rawArtist, durationSeconds),
+            () => FetchLrcmuxAsync(rawTitle, rawArtist, title, artist, durationSeconds),
+            () => FetchSyncLrcAsync(rawTitle, rawArtist, title, artist, durationSeconds),
+            FetchLrclibAsync,
+        };
+        // Shuffle the order on every lookup to spread the load across backends.
+        for (int i = providers.Count - 1; i > 0; i--)
         {
-            plainFallback ??= best;
+            int j = Random.Shared.Next(i + 1);
+            (providers[i], providers[j]) = (providers[j], providers[i]);
         }
 
-        // Nothing synced anywhere: a plain /get hit is still much better than nothing.
+        LyricsResult? plainFallback = null;
+        bool sawUnavailable = false;
+        foreach (var fetch in providers)
+        {
+            LyricsResult? result;
+            try
+            {
+                result = await fetch();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Lyrics provider failed for '{Artist}' - '{Title}': {Message}", rawArtist, rawTitle, ex.Message);
+                continue;
+            }
+            if (result == null)
+            {
+                continue;
+            }
+            if (result.Source == "unavailable")
+            {
+                sawUnavailable = true;
+                continue;
+            }
+            if (result.Found && result.Lines.Count > 0)
+            {
+                return result;
+            }
+            if (result.Found)
+            {
+                plainFallback ??= result;
+            }
+        }
+
+        // Nothing synced anywhere: a plain hit is still much better than nothing.
         return plainFallback ??
-            new LyricsResult(false, false, "", new List<LyricLine>(), "not-found");
+            (sawUnavailable
+                ? new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable")
+                : new LyricsResult(false, false, "", new List<LyricLine>(), "not-found"));
     }
 
     /// <summary>
@@ -447,8 +492,14 @@ public class LyricsService
 
         // Normalize both sides: case, punctuation and yo/ye no longer split identical names
         // ("Anacondaz" vs "AnacondaZ", "Мама," vs "Мама").
-        string a = Normalize(value.GetString() ?? "");
-        string b = Normalize(rawQuery);
+        return NameSimilarityRaw(value.GetString() ?? "", rawQuery);
+    }
+
+    /// <summary>0..100 token-overlap score between two raw strings.</summary>
+    private static int NameSimilarityRaw(string aRaw, string bRaw)
+    {
+        string a = Normalize(aRaw);
+        string b = Normalize(bRaw);
         if (a.Length == 0 || b.Length == 0)
         {
             return 0;
@@ -529,18 +580,27 @@ public class LyricsService
     {
         // The marker can sit in the track name ("Мама, я люблю (Clean)") or only in the
         // album ("Байки Инсайдера (Clean version)"): check both, track first.
-        string[] candidates =
-        {
-            element.TryGetProperty("trackName", out var trackName) && trackName.ValueKind == JsonValueKind.String
-                ? trackName.GetString() ?? ""
-                : "",
-            element.TryGetProperty("albumName", out var albumName) && albumName.ValueKind == JsonValueKind.String
-                ? albumName.GetString() ?? ""
-                : ""
-        };
+        string track = element.TryGetProperty("trackName", out var trackName) && trackName.ValueKind == JsonValueKind.String
+            ? trackName.GetString() ?? ""
+            : "";
+        string album = element.TryGetProperty("albumName", out var albumName) && albumName.ValueKind == JsonValueKind.String
+            ? albumName.GetString() ?? ""
+            : "";
+        return ExtractVersionLabel(track, album);
+    }
+
+    /// <summary>Display label for the matched version from raw track/album names.</summary>
+    private static string ExtractVersionLabel(string trackRaw, string albumRaw)
+    {
+        string[] candidates = { trackRaw, albumRaw };
 
         foreach (string raw in candidates)
         {
+            if (string.IsNullOrEmpty(raw))
+            {
+                continue;
+            }
+
             Match match = Regex.Match(raw, @"[\(\[](?<m>[^\)\]]+)[\)\]]");
             if (!match.Success)
             {
@@ -681,6 +741,250 @@ public class LyricsService
     }
 
     private readonly record struct BetterLyricsResponse(bool Ok, bool Unavailable, string Body);
+
+    /// <summary>
+    /// lrc.red directly (https://lrc.red): the same catalog better-lyrics draws from, without
+    /// its API-key wall. search.json finds the ISRC, then /s/{isrc}.ttml (word timing) or
+    /// .lrc is fetched. Free and keyless.
+    /// </summary>
+    private async Task<LyricsResult?> FetchLrcredAsync(string rawTitle, string rawArtist, string title, string artist, int durationSeconds)
+    {
+        const string provider = "lrc.red";
+        if (string.IsNullOrWhiteSpace(rawTitle) || IsPaused(provider))
+        {
+            return IsPaused(provider)
+                ? new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable")
+                : null;
+        }
+
+        var (searchOk, search) = await GetJsonAsync(provider,
+            "https://lrc.red/search.json?q=" + Uri.EscapeDataString(Clean(rawTitle) + " " + Clean(rawArtist)));
+        if (!searchOk || search.ValueKind != JsonValueKind.Object ||
+            !search.TryGetProperty("hits", out var hits) || hits.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        // Pick the best hit: same name-similarity + duration rules as the lrclib picker.
+        var queryMarkers = ExtractMarkers(rawTitle);
+        JsonElement best = default;
+        bool hasBest = false;
+        int bestScore = int.MinValue;
+        int bestDelta = int.MaxValue;
+        foreach (var hit in hits.EnumerateArray())
+        {
+            if (hit.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+            string hitTitle = hit.TryGetProperty("title", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() ?? "" : "";
+            string hitArtist = hit.TryGetProperty("artist", out var an) && an.ValueKind == JsonValueKind.String ? an.GetString() ?? "" : "";
+            string hitAlbum = hit.TryGetProperty("album", out var al) && al.ValueKind == JsonValueKind.String ? al.GetString() ?? "" : "";
+            if (hitTitle.Length == 0)
+            {
+                continue;
+            }
+
+            int score = NameSimilarityRaw(hitArtist, rawArtist) * 2 + NameSimilarityRaw(hitTitle, rawTitle);
+            if (Normalize(hitTitle) == Normalize(rawTitle))
+            {
+                score += 200;
+            }
+            int delta = int.MaxValue;
+            if (durationSeconds > 0 && hit.TryGetProperty("duration", out var dur) && dur.ValueKind == JsonValueKind.Number)
+            {
+                delta = Math.Abs((int)Math.Round(dur.GetDouble()) - durationSeconds);
+                score += delta <= 2 ? 300 : delta <= 3 ? 270 : delta <= 5 ? 220 : delta <= 8 ? 150 : delta <= 15 ? 60 : delta <= 30 ? 0 : -300;
+            }
+            var hitMarkers = ExtractMarkers(hitTitle);
+            if (hitMarkers.SetEquals(queryMarkers))
+            {
+                score += 150;
+            }
+            else
+            {
+                foreach (var marker in hitMarkers)
+                {
+                    if (!queryMarkers.Contains(marker))
+                    {
+                        score -= IsContentMarker(marker) ? 600 : 250;
+                    }
+                }
+                foreach (var marker in queryMarkers)
+                {
+                    if (!hitMarkers.Contains(marker))
+                    {
+                        score -= 150;
+                    }
+                }
+            }
+
+            if (score > bestScore || (score == bestScore && delta < bestDelta))
+            {
+                bestScore = score;
+                bestDelta = delta;
+                best = hit;
+                hasBest = true;
+            }
+        }
+        if (!hasBest)
+        {
+            return null;
+        }
+
+        string isrc = best.TryGetProperty("isrc", out var isrcProp) && isrcProp.ValueKind == JsonValueKind.String
+            ? isrcProp.GetString() ?? ""
+            : "";
+        if (isrc.Length == 0)
+        {
+            return null;
+        }
+
+        string hitTitleFinal = best.TryGetProperty("title", out var tt) && tt.ValueKind == JsonValueKind.String ? tt.GetString() ?? "" : "";
+        string hitAlbumFinal = best.TryGetProperty("album", out var ta) && ta.ValueKind == JsonValueKind.String ? ta.GetString() ?? "" : "";
+        string version = ExtractVersionLabel(hitTitleFinal, hitAlbumFinal);
+
+        var (ttmlOk, ttml) = await GetTextAsync(provider, "https://lrc.red/s/" + isrc + ".ttml");
+        if (ttmlOk)
+        {
+            var lines = ParseTtml(ttml);
+            if (lines.Count > 0)
+            {
+                return new LyricsResult(true, false, "", lines, "lrc.red", version);
+            }
+        }
+        else if (IsPaused(provider))
+        {
+            return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
+        }
+        var (lrcOk, lrc) = await GetTextAsync(provider, "https://lrc.red/s/" + isrc + ".lrc");
+        if (lrcOk)
+        {
+            var lines = ParseLrc(lrc);
+            if (lines.Count > 0)
+            {
+                return new LyricsResult(true, false, "", lines, "lrc.red", version);
+            }
+        }
+        else if (IsPaused(provider))
+        {
+            return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// lrcmux (https://lrcmux-api.fly.dev): fan-out aggregator over public providers.
+    /// Single /get call returns LRC text. Keyless.
+    /// </summary>
+    private async Task<LyricsResult?> FetchLrcmuxAsync(string rawTitle, string rawArtist, string title, string artist, int durationSeconds)
+    {
+        const string provider = "lrcmux";
+        if (string.IsNullOrWhiteSpace(rawTitle) || IsPaused(provider))
+        {
+            return IsPaused(provider)
+                ? new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable")
+                : null;
+        }
+
+        string url = "https://lrcmux-api.fly.dev/get?artist=" + Uri.EscapeDataString(Clean(rawArtist)) +
+                     "&title=" + Uri.EscapeDataString(Clean(rawTitle)) +
+                     (durationSeconds > 0 ? "&duration=" + durationSeconds.ToString(CultureInfo.InvariantCulture) : "") +
+                     "&format=lrc";
+        var (ok, body) = await GetTextAsync(provider, url);
+        if (!ok)
+        {
+            return IsPaused(provider)
+                ? new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable")
+                : null;
+        }
+
+        var lines = ParseLrc(body);
+        if (lines.Count > 0)
+        {
+            return new LyricsResult(true, false, "", lines, "lrcmux");
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// SyncLRC (https://api.synclrc.dev): JSON with synced/karaoke/plain lines. Cached
+    /// queries are keyless; the service is occasionally down (503), then it is skipped.
+    /// </summary>
+    private async Task<LyricsResult?> FetchSyncLrcAsync(string rawTitle, string rawArtist, string title, string artist, int durationSeconds)
+    {
+        const string provider = "synclrc";
+        if (string.IsNullOrWhiteSpace(rawTitle) || IsPaused(provider))
+        {
+            return IsPaused(provider)
+                ? new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable")
+                : null;
+        }
+
+        string url = "https://api.synclrc.dev/lyrics?track=" + Uri.EscapeDataString(Clean(rawTitle)) +
+                     "&artist=" + Uri.EscapeDataString(Clean(rawArtist)) + "&type=synced&format=lrc" +
+                     (durationSeconds > 0 ? "&duration=" + durationSeconds.ToString(CultureInfo.InvariantCulture) : "");
+        var (ok, element) = await GetJsonAsync(provider, url);
+        if (!ok)
+        {
+            return IsPaused(provider)
+                ? new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable")
+                : null;
+        }
+
+        string synced = element.ValueKind == JsonValueKind.Object &&
+                        element.TryGetProperty("synced", out var s) && s.ValueKind == JsonValueKind.String
+            ? s.GetString() ?? ""
+            : "";
+        var lines = ParseLrc(synced);
+        if (lines.Count > 0)
+        {
+            string track = element.TryGetProperty("track", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() ?? "" : "";
+            string album = element.TryGetProperty("album", out var al) && al.ValueKind == JsonValueKind.String ? al.GetString() ?? "" : "";
+            return new LyricsResult(true, false, "", lines, "synclrc", ExtractVersionLabel(track, album));
+        }
+        return null;
+    }
+
+    /// <summary>Plain-text fetch for endpoints that serve LRC/TTML/documents as text.</summary>
+    private async Task<(bool Ok, string Body)> GetTextAsync(string provider, string url)
+    {
+        if (IsPaused(provider))
+        {
+            return (false, "");
+        }
+
+        try
+        {
+            using var response = await _http.GetAsync(url);
+            if (response.StatusCode == HttpStatusCode.NotFound ||
+                response.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                NoteSuccess(provider);
+                return (false, "");
+            }
+            if (response.StatusCode == HttpStatusCode.ServiceUnavailable ||
+                response.StatusCode == HttpStatusCode.TooManyRequests)
+            {
+                NoteStrike(provider, RetryAfterOf(response));
+                return (false, "");
+            }
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("{Provider} returned {Status} for {Path}", provider, response.StatusCode, url);
+                return (false, "");
+            }
+
+            NoteSuccess(provider);
+            return (true, await response.Content.ReadAsStringAsync());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("{Provider} request failed for {Path}: {Message}", provider, url, ex.Message);
+            return (false, "");
+        }
+    }
 
     private async Task<BetterLyricsResponse> GetBetterLyricsAsync(string path)
     {

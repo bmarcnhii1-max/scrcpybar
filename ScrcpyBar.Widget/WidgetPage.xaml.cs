@@ -417,8 +417,18 @@ namespace ScrcpyBar.Widget
             {
                 if (requestedKey == _lyricsKey)
                 {
+                    // Same track, genuinely nothing: clear the lines too, or the panel
+                    // keeps showing stale lyrics under a "not found" label.
                     LyricsStatus.Text = "Слова не найдены";
+                    _lyrics.Clear();
+                    _karaokeText = "";
+                    _prevIndex = -1;
+                    _curIndex = -1;
+                    _nextIndex = -1;
+                    _lastLyricIndex = -2;
                     SetCurrentLine("");
+                    LyricPrev.Text = "";
+                    LyricNext.Text = "";
                 }
                 else
                 {

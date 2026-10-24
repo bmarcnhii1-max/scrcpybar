@@ -6,7 +6,6 @@
 <img src="https://img.shields.io/badge/platform-Windows%2010%2019041%2B-0078D6.svg" alt="Windows 10 19041+">
 <img src="https://img.shields.io/badge/Android-3DDC84.svg" alt="Android">
 <img src="https://img.shields.io/badge/.NET-8-512BD4.svg" alt=".NET 8">
-<img src="https://img.shields.io/badge/Made%20with-Claude-D4A27F.svg" alt="Made with Claude">
 
 **Музыка с телефона — прямо в оверлее Xbox Game Bar.**
 
@@ -135,11 +134,3 @@ Spotify, Яндекс Музыка, VK Музыка, SoundCloud, Apple Music, De
 ## Лицензия
 
 [MIT](LICENSE) © ScrcpyBar contributors
-
----
-
-<div align="center">
-
-Built with [Claude Code](https://claude.com/claude-code)
-
-</div>
