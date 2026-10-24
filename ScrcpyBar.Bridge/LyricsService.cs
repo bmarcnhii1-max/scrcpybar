@@ -359,7 +359,9 @@ public class LyricsService
             }
             if (result.Found && result.Lines.Count > 0)
             {
-                return result;
+                // Real word timings win as-is; when nobody has them, spread the words
+                // evenly across each line span so the karaoke animation still moves.
+                return WithEstimatedWords(result, durationSeconds);
             }
             if (result.Found)
             {
@@ -624,6 +626,67 @@ public class LyricsService
             }
         }
         return "";
+    }
+
+    /// <summary>
+    /// Spreads a line's words across its time span proportionally to their length.
+    /// Used only when no provider has real word timings; lines that already carry
+    /// words are left untouched.
+    /// </summary>
+    internal static LyricsResult WithEstimatedWords(LyricsResult result, int durationSeconds)
+    {
+        if (!result.Found || result.Lines.Count == 0)
+        {
+            return result;
+        }
+        if (result.Lines.All(line => line.Words.Count > 0))
+        {
+            return result;
+        }
+
+        var lines = new List<LyricLine>(result.Lines.Count);
+        for (int i = 0; i < result.Lines.Count; i++)
+        {
+            var line = result.Lines[i];
+            if (line.Words.Count > 0)
+            {
+                lines.Add(line);
+                continue;
+            }
+            long spanEnd = i + 1 < result.Lines.Count
+                ? result.Lines[i + 1].TimeMs
+                : durationSeconds > 0 ? durationSeconds * 1000L : line.TimeMs + 8000;
+            if (spanEnd <= line.TimeMs)
+            {
+                spanEnd = line.TimeMs + 4000;
+            }
+            lines.Add(line with { Words = DistributeWords(line.Text, line.TimeMs, spanEnd) });
+        }
+        return result with { Lines = lines };
+    }
+
+    private static List<LyricWord> DistributeWords(string text, long startMs, long endMs)
+    {
+        var tokens = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var words = new List<LyricWord>(tokens.Length);
+        if (tokens.Length == 0)
+        {
+            return words;
+        }
+
+        // Weight by letters so long words get more time; spaces ride with the word before them.
+        int total = tokens.Sum(token => token.Length);
+        long span = Math.Max(500, endMs - startMs);
+        long cursor = startMs;
+        for (int i = 0; i < tokens.Length; i++)
+        {
+            bool last = i + 1 >= tokens.Length;
+            long share = total == 0 ? span / tokens.Length : span * tokens[i].Length / total;
+            string wordText = last ? tokens[i] : tokens[i] + " ";
+            words.Add(new LyricWord(cursor, last ? endMs : cursor + share, wordText));
+            cursor += share;
+        }
+        return words;
     }
 
     private static bool IsPaused(ProviderBackoff state) =>
@@ -977,26 +1040,31 @@ public class LyricsService
         }
 
         string url = "https://api.synclrc.dev/lyrics?track=" + Uri.EscapeDataString(Clean(rawTitle)) +
-                     "&artist=" + Uri.EscapeDataString(Clean(rawArtist)) + "&type=synced&format=lrc" +
+                     "&artist=" + Uri.EscapeDataString(Clean(rawArtist)) + "&type=karaoke&format=lrc" +
                      (durationSeconds > 0 ? "&duration=" + durationSeconds.ToString(CultureInfo.InvariantCulture) : "");
         var (ok, element) = await GetJsonAsync(provider, url);
-        if (!ok)
+        if (!ok || element.ValueKind != JsonValueKind.Object)
         {
             return IsPaused(provider)
                 ? new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable")
                 : null;
         }
 
-        string synced = element.ValueKind == JsonValueKind.Object &&
-                        element.TryGetProperty("synced", out var s) && s.ValueKind == JsonValueKind.String
-            ? s.GetString() ?? ""
-            : "";
-        var lines = ParseLrc(synced);
-        if (lines.Count > 0)
+        // Karaoke answers carry the timed text in "synced", plain text in "lyrics".
+        string[] candidates =
         {
-            string track = element.TryGetProperty("track", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() ?? "" : "";
-            string album = element.TryGetProperty("album", out var al) && al.ValueKind == JsonValueKind.String ? al.GetString() ?? "" : "";
-            return new LyricsResult(true, false, "", lines, "synclrc", ExtractVersionLabel(track, album));
+            element.TryGetProperty("synced", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString() ?? "" : "",
+            element.TryGetProperty("lyrics", out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() ?? "" : ""
+        };
+        foreach (string text in candidates)
+        {
+            var lines = ParseLrc(text);
+            if (lines.Count > 0)
+            {
+                string track = element.TryGetProperty("track", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() ?? "" : "";
+                string album = element.TryGetProperty("album", out var al) && al.ValueKind == JsonValueKind.String ? al.GetString() ?? "" : "";
+                return new LyricsResult(true, false, "", lines, "synclrc", ExtractVersionLabel(track, album));
+            }
         }
         return null;
     }
