@@ -202,17 +202,22 @@
                     </TextBlock.RenderTransform>
                 </TextBlock>
 
-                <!-- The current line is simply bright, the ones around it are dim. The line
-                     changes as the song plays, which is the sync - no sweeping highlight. -->
-                <TextBlock x:Name="LyricCur" Text="" FontSize="19" FontWeight="Bold"
-                           TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis"
-                           HorizontalAlignment="Center" TextAlignment="Center" Foreground="#F9FAFB"
-                           Tapped="LyricCur_Tapped" ToolTipService.ToolTip="Нажми — перейти к этой строке"
-                           RenderTransformOrigin="0.5,0.5">
-                    <TextBlock.RenderTransform>
+                <!-- The current line works like YouTube Music: gray text underneath, bright
+                     text on top clipped to the fraction already sung, so the highlight
+                     sweeps across the line letter by letter as the song plays. -->
+                <Grid x:Name="LyricCurHost" HorizontalAlignment="Center"
+                      Tapped="LyricCur_Tapped" ToolTipService.ToolTip="Нажми — перейти к этой строке"
+                      RenderTransformOrigin="0.5,0.5">
+                    <Grid.RenderTransform>
                         <TranslateTransform/>
-                    </TextBlock.RenderTransform>
-                </TextBlock>
+                    </Grid.RenderTransform>
+                    <TextBlock x:Name="LyricCurBase" Text="" FontSize="19" FontWeight="Bold"
+                               TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis"
+                               HorizontalAlignment="Center" TextAlignment="Center" Foreground="#6B7280"/>
+                    <TextBlock x:Name="LyricCurFill" Text="" FontSize="19" FontWeight="Bold"
+                               TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis"
+                               HorizontalAlignment="Center" TextAlignment="Center" Foreground="#F9FAFB"/>
+                </Grid>
 
                 <TextBlock x:Name="LyricNext" Text="" FontSize="12" Foreground="#4B5563"
                            TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"

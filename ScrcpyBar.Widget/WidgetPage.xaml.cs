@@ -10,7 +10,6 @@ using Windows.UI;
 
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
-using Windows.UI.Xaml.Documents;
 using Windows.UI.Xaml.Input;
 using Windows.UI.Xaml.Media;
 using Windows.UI.Xaml.Media.Animation;
@@ -84,10 +83,9 @@ namespace ScrcpyBar.Widget
             _timer.Interval = TimeSpan.FromSeconds(1);
             _timer.Tick += async (s, e) => await FetchTrackAsync();
 
-            // The current line has to follow the song, so the check runs on its own timer
-            // instead of riding on the one second track poll. It only runs while the panel is
-            // open, the rest of the time the widget stays idle.
-            _karaokeTimer.Interval = TimeSpan.FromMilliseconds(100);
+            // The fill has to sweep smoothly, so the tick runs at 25 fps while the
+            // panel is open; each tick only resizes one clip rectangle.
+            _karaokeTimer.Interval = TimeSpan.FromMilliseconds(40);
             _karaokeTimer.Tick += (s, e) => UpdateKaraoke();
         }
 
@@ -624,7 +622,11 @@ namespace ScrcpyBar.Widget
                 AnimateLyricChange();
             }
 
-            SetCurrentLineWords(current, position);
+            long lineEndMs = index + 1 < _lyrics.Count
+                ? _lyrics[index + 1].TimeMs
+                : (long)position + 8000;
+
+            SetCurrentLineWords(current, position, lineEndMs);
         }
 
         // ---------------------------------------------------------------- animations
@@ -635,23 +637,23 @@ namespace ScrcpyBar.Widget
         /// </summary>
         private void AnimateLyricChange()
         {
-            SlideAndFade(LyricCur, fromOffset: 16, toOpacity: 1.0);
+            SlideAndFade(LyricCurHost, fromOffset: 16, toOpacity: 1.0);
             SlideAndFade(LyricNext, fromOffset: 10, toOpacity: 0.45);
             SlideAndFade(LyricPrev, fromOffset: 10, toOpacity: 0.6);
         }
 
-        private static void SlideAndFade(TextBlock block, double fromOffset, double toOpacity)
+        private static void SlideAndFade(UIElement element, double fromOffset, double toOpacity)
         {
-            if (block == null)
+            if (element == null)
             {
                 return;
             }
 
-            var transform = block.RenderTransform as Windows.UI.Xaml.Media.TranslateTransform;
+            var transform = element.RenderTransform as TranslateTransform;
             if (transform == null)
             {
-                transform = new Windows.UI.Xaml.Media.TranslateTransform();
-                block.RenderTransform = transform;
+                transform = new TranslateTransform();
+                element.RenderTransform = transform;
             }
 
             var easing = new Windows.UI.Xaml.Media.Animation.CubicEase { EasingMode = Windows.UI.Xaml.Media.Animation.EasingMode.EaseOut };
@@ -672,9 +674,9 @@ namespace ScrcpyBar.Widget
                 EasingFunction = easing
             };
 
-            Storyboard.SetTarget(fade, block);
+            Storyboard.SetTarget(fade, element);
             Storyboard.SetTargetProperty(fade, "Opacity");
-            Storyboard.SetTarget(slide, block);
+            Storyboard.SetTarget(slide, element);
             Storyboard.SetTargetProperty(slide, "(UIElement.RenderTransform).(TranslateTransform.Y)");
 
             var storyboard = new Storyboard();
@@ -705,7 +707,7 @@ namespace ScrcpyBar.Widget
             storyboard.Begin();
         }
 
-        /// <summary>Writes the current line into the lyric text.</summary>
+        /// <summary>Writes the current line into the lyric text (plain, no timings).</summary>
         private void SetCurrentLine(string text)
         {
             if (_karaokeText == text)
@@ -714,59 +716,89 @@ namespace ScrcpyBar.Widget
             }
 
             _karaokeText = text;
-            _curWordRuns.Clear();
-            LyricCur.Text = text;
+            LyricCurBase.Text = text;
+            LyricCurFill.Text = text;
+            ResetFillClip();
         }
 
-        private readonly SolidColorBrush _wordSungBrush =
-            new SolidColorBrush(Color.FromArgb(255, 249, 250, 251));
-        private readonly SolidColorBrush _wordTodoBrush =
-            new SolidColorBrush(Color.FromArgb(255, 107, 114, 128));
-        private List<(Run Run, long StartMs)> _curWordRuns =
-            new List<(Run, long)>();
+        private void ResetFillClip()
+        {
+            LyricCurFill.Clip = new RectangleGeometry { Rect = new Rect(0, 0, 0, 0) };
+        }
 
         /// <summary>
-        /// Word-by-word karaoke: the line is split into runs once, then every 100 ms tick
-        /// only flips run colors. Lines without word timings fall back to plain text.
+        /// YouTube-Music style karaoke: the bright copy of the line is clipped to the
+        /// fraction already sung, so the highlight sweeps across letter by letter.
+        /// The text itself is rewritten only when the line changes; every tick just
+        /// resizes the clip rectangle.
         /// </summary>
-        private void SetCurrentLineWords(LyricLine line, double positionMs)
+        private void SetCurrentLineWords(LyricLine line, double positionMs, long lineEndMs)
         {
             if (_karaokeText != line.Text)
             {
                 _karaokeText = line.Text;
-                LyricCur.Inlines.Clear();
-                _curWordRuns.Clear();
-                if (line.Words.Count == 0)
-                {
-                    LyricCur.Text = line.Text;
-                }
-                else
-                {
-                    foreach (var word in line.Words)
-                    {
-                        var run = new Run { Text = word.Text };
-                        LyricCur.Inlines.Add(run);
-                        _curWordRuns.Add((run, word.TimeMs));
-                    }
-                }
+                LyricCurBase.Text = line.Text;
+                LyricCurFill.Text = line.Text;
+                ResetFillClip();
             }
-            UpdateWordColors(positionMs);
+            UpdateFillClip(SungFraction(line, positionMs, lineEndMs));
         }
 
-        private void UpdateWordColors(double positionMs)
+        /// <summary>
+        /// How much of the line is sung: word timings give it per letter (partial words
+        /// interpolate), without timings the line fills linearly across its span.
+        /// </summary>
+        private static double SungFraction(LyricLine line, double positionMs, long lineEndMs)
         {
-            if (_curWordRuns.Count == 0)
+            if (line.Words.Count > 0)
+            {
+                int total = 0;
+                int sung = 0;
+                foreach (var word in line.Words)
+                {
+                    int len = word.Text.Length;
+                    total += len;
+                    if (positionMs >= word.EndMs)
+                    {
+                        sung += len;
+                    }
+                    else if (positionMs > word.TimeMs && word.EndMs > word.TimeMs)
+                    {
+                        sung += (int)(len * (positionMs - word.TimeMs) / (word.EndMs - word.TimeMs));
+                    }
+                }
+                if (total == 0)
+                {
+                    return 0;
+                }
+                return Math.Max(0, Math.Min(1, (double)sung / total));
+            }
+
+            if (lineEndMs <= line.TimeMs)
+            {
+                return positionMs >= line.TimeMs ? 1 : 0;
+            }
+            return Math.Max(0, Math.Min(1, (positionMs - line.TimeMs) / (lineEndMs - line.TimeMs)));
+        }
+
+        private void UpdateFillClip(double fraction)
+        {
+            double width = LyricCurBase.ActualWidth;
+            double height = LyricCurBase.ActualHeight;
+            if (width <= 0 || height <= 0)
             {
                 return;
             }
 
-            foreach (var (run, startMs) in _curWordRuns)
+            fraction = Math.Max(0, Math.Min(1, fraction));
+            var rect = new Rect(0, 0, fraction * width, height);
+            if (LyricCurFill.Clip is RectangleGeometry clip)
             {
-                var want = positionMs >= startMs ? _wordSungBrush : _wordTodoBrush;
-                if (!ReferenceEquals(run.Foreground, want))
-                {
-                    run.Foreground = want;
-                }
+                clip.Rect = rect;
+            }
+            else
+            {
+                LyricCurFill.Clip = new RectangleGeometry { Rect = rect };
             }
         }
 
