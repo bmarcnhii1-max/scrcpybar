@@ -18,6 +18,8 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.LruCache
 import android.util.Size
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.InputStream
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
@@ -200,14 +202,8 @@ class MediaRepository private constructor(private val appContext: Context) {
                 "rating is not supported by this player"
             )
         }
-        // Prefer the media-item overload: some players (YouTube Music) ignore the
-        // bare setRating but honor the one bound to the current media id.
-        val mediaId = controller.metadata?.description?.mediaId
-        if (mediaId != null) {
-            controller.transportControls.setRating(mediaId, rating)
-        } else {
-            controller.transportControls.setRating(rating)
-        }
+        // Framework TransportControls only has setRating(Rating) for the current item.
+        controller.transportControls.setRating(rating)
         return null
     }
 
