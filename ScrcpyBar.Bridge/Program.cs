@@ -312,6 +312,7 @@ body { background: var(--bg); background-image: radial-gradient(120px 120px at 1
 .lyr-line.cur { color: #fff; font-weight: 700; background: rgba(22, 163, 74, 0.18); }
 .lyr-plain { color: var(--mut); white-space: pre-wrap; }
 .lyr-empty { color: var(--mut); font-size: 11px; }
+.lyr-jump { background: rgba(22, 163, 74, 0.25); border: 1px solid rgba(74, 222, 128, 0.4); border-radius: 99px; color: #fff; font-size: 10px; padding: 2px 10px; cursor: pointer; display: none; }
 .ghost-off { opacity: 0.45; }
 @media (max-width: 420px) {
   body { padding: 8px; align-items: flex-start; }
@@ -342,14 +343,14 @@ body { background: var(--bg); background-image: radial-gradient(120px 120px at 1
 <button class="btn" id="lyrBtn" onclick="toggleLyrics()" title="Текст песни"><svg viewBox="0 0 24 24"><path d="M4 5h16v2H4zm0 4h16v2H4zm0 4h10v2H4zm0 4h10v2H4z"/></svg></button>
 </div>
 <div class="lyr-wrap" id="lyrWrap">
-<div class="lyr-head"><span>Текст песни</span><span id="lyrSrc"></span></div>
+<div class="lyr-head"><span>Текст песни</span><span><span id="lyrSrc"></span> <button class="lyr-jump" id="lyrJump" onclick="jumpToCurrent()">▼ к строке</button></span></div>
 <div class="lyr-box" id="lyrBox"><div class="lyr-empty">загрузка...</div></div>
 </div>
 <div class="bot"><span>USB &middot; ADB</span><div class="vol"><button class="vbtn" onclick="control('vol-down')">-</button><span id="volLevel">-</span><button class="vbtn" onclick="control('vol-up')">+</button></div></div>
 </div>
 <script>
 let isPlaying = false, isLiked = null, posMs = 0, durMs = 0, stampMs = 0, coverKey = '';
-let lyrLines = [], lyrKey = '', lyrIdx = -1, lyrScrollAt = 0;
+let lyrLines = [], lyrKey = '', lyrIdx = -1, lyrScrollAt = 0, lyrAutoAt = 0;
 try { if (localStorage.getItem('lyr') === '0') { document.getElementById('lyrWrap').style.display = 'none'; document.getElementById('lyrBtn').classList.add('ghost-off'); } } catch (e) {}
 function toggleLyrics() {
     const w = document.getElementById('lyrWrap');
@@ -358,7 +359,27 @@ function toggleLyrics() {
     document.getElementById('lyrBtn').classList.toggle('ghost-off', !hidden);
     try { localStorage.setItem('lyr', hidden ? '1' : '0'); } catch (e) {}
 }
-document.getElementById('lyrBox').addEventListener('scroll', () => { lyrScrollAt = Date.now(); }, { passive: true });
+document.getElementById('lyrBox').addEventListener('scroll', () => {
+    // Programmatic follow-scrolls also fire scroll events: ignore those so the
+    // follow does not mistake itself for the user and mute itself.
+    if (Date.now() - lyrAutoAt > 500) lyrScrollAt = Date.now();
+}, { passive: true });
+function followLine(el) {
+    const box = $('lyrBox');
+    lyrAutoAt = Date.now();
+    box.scrollTo({ top: el.offsetTop - box.clientHeight / 2 + el.clientHeight / 2, behavior: 'smooth' });
+}
+function jumpToCurrent() {
+    lyrScrollAt = 0;
+    const ch = $('lyrBox').children;
+    if (lyrIdx >= 0 && ch[lyrIdx]) followLine(ch[lyrIdx]);
+}
+function updateJumpBtn() {
+    const box = $('lyrBox'), btn = $('lyrJump'), ch = box.children;
+    const el = lyrIdx >= 0 ? ch[lyrIdx] : null;
+    const out = !!el && (el.offsetTop < box.scrollTop || el.offsetTop + el.clientHeight > box.scrollTop + box.clientHeight);
+    btn.style.display = out ? 'inline-block' : 'none';
+}
 async function loadLyrics() {
     const box = $('lyrBox');
     try {
@@ -453,7 +474,7 @@ function paintProg() {
     if (lyrLines.length) {
         let idx = 0;
         for (let i = 0; i < lyrLines.length; i++) {
-            const t = lyrLines[i].timeMs ?? lyrLines[i].TimeMs;
+            const t = Number(lyrLines[i].timeMs ?? lyrLines[i].TimeMs) || 0;
             if (p >= t) idx = i; else break;
         }
         if (idx !== lyrIdx) {
@@ -462,9 +483,10 @@ function paintProg() {
             lyrIdx = idx;
             if (ch[idx]) {
                 ch[idx].classList.add('cur');
-                if (Date.now() - lyrScrollAt > 8000) ch[idx].scrollIntoView({ block: 'nearest' });
+                if (isPlaying && Date.now() - lyrScrollAt > 8000) followLine(ch[idx]);
             }
         }
+        updateJumpBtn();
     }
 }
 async function control(action) {
