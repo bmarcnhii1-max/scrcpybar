@@ -218,10 +218,6 @@ class MediaRepository private constructor(private val appContext: Context) {
         controller.transportControls.setRating(rating)
         return null
     }
-        // Framework TransportControls only has setRating(Rating) for the current item.
-        controller.transportControls.setRating(rating)
-        return null
-    }
 
     private fun isCurrentlyPlaying(controller: MediaController): Boolean = when (controller.playbackState?.state) {
         PlaybackState.STATE_PLAYING,
