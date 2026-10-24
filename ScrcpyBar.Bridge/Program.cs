@@ -262,442 +262,151 @@ static string GetHtmlDashboard() => """
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Scrcpy Music Control</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --bg-color: #0b0f19;
-            --card-bg: rgba(18, 24, 38, 0.75);
-            --border-color: rgba(255, 255, 255, 0.1);
-            --primary: #107c41; /* Xbox Green */
-            --primary-glow: rgba(16, 124, 65, 0.45);
-            --accent: #52b788;
-            --text-main: #f3f4f6;
-            --text-muted: #9ca3af;
-        }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            font-family: 'Outfit', sans-serif;
-            -webkit-user-select: none;
-            user-select: none;
-        }
-
-        body {
-            background-color: var(--bg-color);
-            background-image: 
-                radial-gradient(circle at 10% 20%, rgba(16, 124, 65, 0.18) 0%, transparent 40%),
-                radial-gradient(circle at 90% 80%, rgba(82, 183, 136, 0.12) 0%, transparent 40%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-            color: var(--text-main);
-        }
-
-        .widget-card {
-            width: 100%;
-            max-width: 380px;
-            background: var(--card-bg);
-            backdrop-filter: blur(24px);
-            -webkit-backdrop-filter: blur(24px);
-            border: 1px solid var(--border-color);
-            border-radius: 20px;
-            padding: 24px;
-            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.15);
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-            transition: all 0.3s ease;
-        }
-
-        .header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-
-        .brand {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 13px;
-            font-weight: 700;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-            color: var(--text-muted);
-        }
-
-        .brand-icon {
-            width: 22px;
-            height: 22px;
-            background: var(--primary);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #fff;
-            box-shadow: 0 0 10px var(--primary-glow);
-        }
-
-        .status-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 12px;
-            font-weight: 600;
-            padding: 4px 10px;
-            border-radius: 99px;
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-        }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #ef4444;
-            box-shadow: 0 0 8px #ef4444;
-            transition: background 0.3s;
-        }
-
-        .status-dot.connected {
-            background: #10b981;
-            box-shadow: 0 0 8px #10b981;
-        }
-
-        .track-hero {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }
-
-        .art-box {
-            width: 72px;
-            height: 72px;
-            border-radius: 14px;
-            background: linear-gradient(135deg, #1f293d, #111827);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .art-box svg {
-            width: 32px;
-            height: 32px;
-            fill: var(--text-muted);
-            transition: all 0.3s ease;
-        }
-
-        .art-box.playing svg {
-            fill: var(--accent);
-            filter: drop-shadow(0 0 8px var(--primary-glow));
-            animation: pulse 2s infinite ease-in-out;
-        }
-
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.08); }
-        }
-
-        .track-meta {
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-
-        .track-title {
-            font-size: 17px;
-            font-weight: 700;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            line-height: 1.25;
-        }
-
-        .track-artist {
-            font-size: 14px;
-            color: var(--text-muted);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .track-app {
-            font-size: 11px;
-            color: var(--accent);
-            text-transform: uppercase;
-            font-weight: 700;
-            letter-spacing: 0.5px;
-            margin-top: 2px;
-        }
-
-        .controls {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 16px;
-            padding-top: 6px;
-        }
-
-        .btn-ctrl {
-            background: rgba(255, 255, 255, 0.07);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 50%;
-            width: 44px;
-            height: 44px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-main);
-            cursor: pointer;
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-            outline: none;
-        }
-
-        .btn-ctrl:hover {
-            background: rgba(255, 255, 255, 0.15);
-            transform: scale(1.06);
-            border-color: rgba(255, 255, 255, 0.2);
-        }
-
-.btn-ctrl:active {
-        transform: scale(0.94);
-    }
-
-        .btn-play {
-            width: 56px;
-            height: 56px;
-            background: var(--primary);
-            border-color: rgba(255, 255, 255, 0.2);
-            box-shadow: 0 4px 18px var(--primary-glow);
-        }
-
-        .btn-play:hover {
-            background: #15803d;
-            box-shadow: 0 6px 24px rgba(16, 124, 65, 0.6);
-            transform: scale(1.08);
-        }
-
-        .btn-ctrl svg {
-            width: 20px;
-            height: 20px;
-            fill: currentColor;
-        }
-
-        .btn-play svg {
-            width: 26px;
-            height: 26px;
-        }
-
-        .footer {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            font-size: 11px;
-            color: var(--text-muted);
-            border-top: 1px solid rgba(255, 255, 255, 0.05);
-            padding-top: 14px;
-        }
-
-        .vol-group {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .vol-btn {
-            background: rgba(255, 255, 255, 0.06);
-            border: none;
-            border-radius: 6px;
-            color: var(--text-muted);
-            width: 26px;
-            height: 24px;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: 700;
-        }
-
-        .vol-btn:hover {
-            background: rgba(255, 255, 255, 0.15);
-            color: #fff;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scrcpy Bar</title>
+<style>
+:root { color-scheme: dark; --bg: #0a0e14; --card: rgba(20, 26, 38, 0.82); --line: rgba(255, 255, 255, 0.09); --green: #16a34a; --green-hi: #4ade80; --txt: #f3f4f6; --mut: #9ca3af; }
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, 'Segoe UI', Roboto, sans-serif; -webkit-user-select: none; user-select: none; }
+body { background: var(--bg); background-image: radial-gradient(120px 120px at 15% 10%, rgba(22, 163, 74, 0.25), transparent), radial-gradient(160px 160px at 85% 90%, rgba(74, 222, 128, 0.12), transparent); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 12px; color: var(--txt); }
+.card { width: 100%; max-width: 300px; background: var(--card); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid var(--line); border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5); }
+.top { display: flex; align-items: center; justify-content: space-between; }
+.brand { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--mut); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+.dot.on { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+.st { font-size: 11px; color: var(--mut); }
+.hero { display: flex; align-items: center; gap: 10px; min-height: 52px; }
+.art { width: 52px; height: 52px; border-radius: 10px; flex-shrink: 0; background: linear-gradient(135deg, #1e293b, #0f172a); border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.art svg { width: 24px; height: 24px; fill: var(--mut); }
+.art img { width: 100%; height: 100%; object-fit: cover; display: none; }
+.art.has-art svg { display: none; }
+.art.has-art img { display: block; }
+.art.playing svg { fill: var(--green-hi); animation: pulse 2s infinite ease-in-out; }
+@keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.1); } }
+.meta { overflow: hidden; flex: 1; min-width: 0; }
+.title { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.artist { font-size: 12px; color: var(--mut); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.app { font-size: 10px; color: var(--green-hi); text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px; }
+.prog { height: 14px; display: flex; align-items: center; cursor: pointer; }
+.bar { height: 3px; flex: 1; background: rgba(255, 255, 255, 0.12); border-radius: 99px; overflow: hidden; }
+.fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--green), var(--green-hi)); border-radius: 99px; }
+.times { display: flex; justify-content: space-between; font-size: 10px; color: var(--mut); margin-top: -6px; }
+.row { display: flex; align-items: center; justify-content: center; gap: 10px; }
+.btn { width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.06); color: var(--txt); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.15s, background 0.15s; outline: none; }
+.btn:hover { background: rgba(255, 255, 255, 0.14); transform: scale(1.07); }
+.btn:active { transform: scale(0.93); }
+.btn svg { width: 16px; height: 16px; fill: currentColor; }
+.play { width: 46px; height: 46px; background: var(--green); border-color: rgba(255, 255, 255, 0.2); box-shadow: 0 3px 14px rgba(22, 163, 74, 0.45); }
+.play:hover { background: #15803d; }
+.play svg { width: 20px; height: 20px; }
+.like.liked { color: #f87171; border-color: rgba(248, 113, 113, 0.4); }
+.like.liked svg { fill: #f87171; }
+.bot { display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--mut); border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 8px; }
+.vol { display: flex; align-items: center; gap: 4px; }
+.vbtn { background: rgba(255, 255, 255, 0.06); border: none; border-radius: 5px; color: var(--mut); min-width: 20px; height: 20px; cursor: pointer; font-size: 12px; font-weight: 700; }
+.vbtn:hover { background: rgba(255, 255, 255, 0.15); color: #fff; }
+</style>
 </head>
 <body>
-
-<div class="widget-card" id="widget">
-    <div class="header">
-        <div class="brand">
-            <div class="brand-icon">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-2-12.5v7l6-3.5-6-3.5z"/>
-                </svg>
-            </div>
-            <span>Scrcpy Bar</span>
-        </div>
-        <div class="status-badge">
-            <span class="status-dot" id="statusDot"></span>
-            <span id="statusText">Подключение...</span>
-        </div>
-    </div>
-
-    <div class="track-hero">
-        <div class="art-box" id="artBox">
-            <svg viewBox="0 0 24 24">
-                <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
-            </svg>
-        </div>
-        <div class="track-meta">
-            <div class="track-title" id="trackTitle">Загрузка...</div>
-            <div class="track-artist" id="trackArtist">Ожидание данных с телефона</div>
-            <div class="track-app" id="trackApp">--</div>
-        </div>
-    </div>
-
-<div class="controls">
-        <button class="btn-ctrl" id="prevBtn" title="Предыдущий (Previous)" onclick="control('prev')">
-            <svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
-        </button>
-        <button class="btn-ctrl btn-play" id="playBtn" title="Пауза/Воспроизведение" onclick="control('play-pause')">
-            <svg id="playIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-        </button>
-        <button class="btn-ctrl" id="nextBtn" title="Следующий (Next)" onclick="control('next')">
-            <svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
-        </button>
-        <button class="btn-ctrl" id="likeBtn" title="Нравится" onclick="toggleLike()" style="display:none">
-            <svg id="likeIcon" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
-        </button>
-    </div>
-
-    <div class="footer">
-        <span id="phoneStatus">ADB: OK</span>
-        <div class="vol-group">
-            <span>Громкость:</span>
-            <button class="vol-btn" onclick="control('vol-down')">-</button>
-            <span id="volLevel">13</span>
-            <button class="vol-btn" onclick="control('vol-up')">+</button>
-        </div>
-    </div>
+<div class="card">
+<div class="top"><div class="brand"><span class="dot" id="statusDot"></span>Scrcpy Bar</div><span class="st" id="statusText">...</span></div>
+<div class="hero">
+<div class="art" id="artBox"><svg viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg><img id="coverImg" alt=""></div>
+<div class="meta"><div class="title" id="trackTitle">Загрузка...</div><div class="artist" id="trackArtist">Ожидание данных</div><div class="app" id="trackApp"></div></div>
 </div>
-
+<div><div class="prog" id="progBar" title="Перемотать"><div class="bar"><div class="fill" id="progFill"></div></div></div><div class="times"><span id="posTime">0:00</span><span id="durTime">0:00</span></div></div>
+<div class="row">
+<button class="btn" onclick="control('prev')" title="Назад"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button>
+<button class="btn play" onclick="control('play-pause')" title="Пауза / играть"><svg id="playIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+<button class="btn" onclick="control('next')" title="Вперед"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>
+<button class="btn like" id="likeBtn" onclick="toggleLike()" title="Нравится" style="display:none"><svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></button>
+</div>
+<div class="bot"><span>USB &middot; ADB</span><div class="vol"><button class="vbtn" onclick="control('vol-down')">-</button><span id="volLevel">-</span><button class="vbtn" onclick="control('vol-up')">+</button></div></div>
+</div>
 <script>
-    let isPlaying = false;
-    let isLiked = null;
-
-    async function updateTrack() {
-        try {
-            const res = await fetch('/api/track');
-            if (!res.ok) throw new Error('API error');
-            const data = await res.json();
-            applyData(data);
-        } catch (e) {
-            document.getElementById('statusDot').className = 'status-dot';
-            document.getElementById('statusText').innerText = 'Офлайн';
-            document.getElementById('trackTitle').innerText = 'Нет связи с мостом';
-            document.getElementById('trackArtist').innerText = 'Проверь запуск ScrcpyBar.Bridge';
-        }
+let isPlaying = false, isLiked = null, posMs = 0, durMs = 0, stampMs = 0, coverKey = '';
+const $ = id => document.getElementById(id);
+const fmt = ms => { if (!ms || ms < 0) ms = 0; const s = Math.floor(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+const curPos = () => posMs + (isPlaying ? Date.now() - stampMs : 0);
+async function updateTrack() {
+    try {
+        const res = await fetch('/api/track');
+        if (!res.ok) throw 0;
+        applyData(await res.json());
+    } catch (e) {
+        $('statusDot').className = 'dot';
+        $('statusText').innerText = 'офлайн';
     }
-
-    function applyData(data) {
-        const dot = document.getElementById('statusDot');
-        const statusText = document.getElementById('statusText');
-        const title = document.getElementById('trackTitle');
-        const artist = document.getElementById('trackArtist');
-        const app = document.getElementById('trackApp');
-        const artBox = document.getElementById('artBox');
-        const playIcon = document.getElementById('playIcon');
-        const vol = document.getElementById('volLevel');
-
-        if (!data.connected) {
-            dot.className = 'status-dot';
-            statusText.innerText = 'Нет телефона';
-            title.innerText = 'Телефон не подключен';
-            artist.innerText = data.message || 'Включи отладку по USB';
-            app.innerText = '--';
-            artBox.classList.remove('playing');
-            return;
-        }
-
-        dot.className = 'status-dot connected';
-        statusText.innerText = 'Онлайн';
-
-        title.innerText = data.title || 'Нет трека';
-        artist.innerText = data.artist || (data.hasTrack ? '' : 'Запусти музыку на телефоне');
-        app.innerText = data.appName || data.packageName || '';
-
-        isPlaying = data.isPlaying;
-        if (isPlaying) {
-            artBox.classList.add('playing');
-            // Show pause icon: 2 vertical bars
-            playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
-        } else {
-            artBox.classList.remove('playing');
-            // Show play icon: triangle
-            playIcon.innerHTML = '<path d="M8 5v14l11-7z"/>';
-        }
-
-        if (data.volumeCurrent !== undefined) {
-            vol.innerText = data.volumeCurrent;
-        }
-
-        isLiked = data.isLiked === true ? true : data.isLiked === false ? false : null;
-        updateLikeButton();
+}
+function applyData(d) {
+    const dot = $('statusDot');
+    if (!d.connected) {
+        dot.className = 'dot';
+        $('statusText').innerText = 'нет телефона';
+        $('trackTitle').innerText = 'Телефон не подключен';
+        $('trackArtist').innerText = d.message || 'Включи отладку по USB';
+        $('trackApp').innerText = '';
+        $('posTime').innerText = '0:00'; $('durTime').innerText = '0:00'; $('progFill').style.width = '0';
+        $('artBox').classList.remove('playing');
+        return;
     }
-
-    function updateLikeButton() {
-        const btn = document.getElementById('likeBtn');
-        const icon = document.getElementById('likeIcon');
-        if (isLiked === null || isLiked === undefined) {
-            btn.style.display = 'none';
-            return;
-        }
-        btn.style.display = 'flex';
-        icon.style.fill = isLiked ? '#e5484d' : 'currentColor';
+    dot.className = 'dot on';
+    $('statusText').innerText = 'онлайн';
+    $('trackTitle').innerText = d.title || 'Нет трека';
+    $('trackArtist').innerText = d.artist || (d.hasTrack ? '' : 'Запусти музыку на телефоне');
+    $('trackApp').innerText = d.appName || d.packageName || '';
+    isPlaying = !!d.isPlaying;
+    $('artBox').classList.toggle('playing', isPlaying);
+    $('playIcon').innerHTML = isPlaying ? '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>' : '<path d="M8 5v14l11-7z"/>';
+    if (d.volumeCurrent !== undefined) $('volLevel').innerText = d.volumeCurrent;
+    posMs = (d.positionMs ?? d.PositionMs) || 0;
+    durMs = (d.durationMs ?? d.DurationMs) || 0;
+    stampMs = Date.now();
+    const key = (d.title || '') + '|' + (d.artist || '');
+    if (key !== coverKey) {
+        coverKey = key;
+        const img = $('coverImg');
+        img.onload = () => $('artBox').classList.add('has-art');
+        img.onerror = () => $('artBox').classList.remove('has-art');
+        img.src = '/api/cover?k=' + Date.now();
     }
-
-    async function toggleLike() {
-        try {
-            const res = await fetch('/api/like', { method: 'POST' });
-            if (res.ok) {
-                const data = await res.json();
-                applyData(data.track || data);
-            }
-        } catch (e) {
-            console.error(e);
-        }
-    }
-
-    async function control(action) {
-        try {
-            const res = await fetch('/api/' + action, { method: 'POST' });
-            if (res.ok) {
-                const data = await res.json();
-                applyData(data);
-            }
-        } catch (e) {
-            console.error(e);
-        }
-    }
-
-    // Live polling every 1 second
-    setInterval(updateTrack, 1000);
-    updateTrack();
+    isLiked = d.isLiked === true ? true : d.isLiked === false ? false : null;
+    const lb = $('likeBtn');
+    lb.style.display = isLiked === null ? 'none' : 'flex';
+    lb.classList.toggle('liked', isLiked === true);
+    paintProg();
+}
+function paintProg() {
+    const p = curPos();
+    $('durTime').innerText = fmt(durMs);
+    $('posTime').innerText = fmt(Math.min(p, durMs || p));
+    $('progFill').style.width = (durMs > 0 ? Math.max(0, Math.min(1, p / durMs)) * 100 : 0) + '%';
+}
+async function control(action) {
+    try {
+        const res = await fetch('/api/' + action, { method: 'POST' });
+        if (res.ok) applyData(await res.json());
+    } catch (e) { /* offline */ }
+}
+async function toggleLike() {
+    try {
+        const res = await fetch('/api/like', { method: 'POST' });
+        if (res.ok) { const d = await res.json(); applyData(d.track || d); }
+    } catch (e) { /* offline */ }
+}
+$('progBar').addEventListener('click', async e => {
+    if (!durMs || durMs <= 0) return;
+    const r = $('progBar').getBoundingClientRect();
+    const target = Math.floor(durMs * Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)));
+    try {
+        const res = await fetch('/api/seek-position?positionMs=' + target + '&durationMs=' + durMs, { method: 'POST' });
+        if (res.ok) { const d = await res.json(); if (d.track) applyData(d.track); }
+    } catch (err) { /* offline */ }
+});
+setInterval(updateTrack, 2000);
+setInterval(paintProg, 250);
+updateTrack();
 </script>
-
 </body>
 </html>
 """;
