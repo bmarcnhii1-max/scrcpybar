@@ -54,6 +54,7 @@ build/                     готовые артефакты релиза
 | `POST` | `/api/seek-position?positionMs=&durationMs=` | Точная перемотка |
 | `POST` | `/api/rewind` · `/api/fast-forward` | Короткая перемотка ±5 с |
 | `POST` | `/api/vol-up` · `/api/vol-down` · `/api/volume?level=N` | Громкость |
+| `POST` | `/api/like?value=true|false` | Лайк/анлайк (без value — тоггл по текущему состоянию) |
 | `GET` | `/` | Веб-пульт |
 
 </details>
