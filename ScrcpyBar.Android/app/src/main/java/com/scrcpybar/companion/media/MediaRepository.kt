@@ -189,11 +189,23 @@ class MediaRepository private constructor(private val appContext: Context) {
     // ---------------------------------------------------------------- internals
 
     /**
-     * Likes via the player's rating: heart where exposed, thumbs up/down otherwise
-     * (YouTube Music uses thumbs). Returns null on success, a Failure when the
-     * player has no rating at all.
+     * Likes via the player's own channel: YouTube Music honors thumbs_up_action /
+     * thumbs_down_action custom actions while silently ignoring direct setRating calls.
+     * Falls back to a heart/thumb rating for players without those actions.
      */
     private fun setLiked(controller: MediaController, liked: Boolean): ControlResult? {
+        val custom = controller.playbackState?.customActions?.map { it.action }.orEmpty()
+        val up = "thumbs_up_action"
+        val down = "thumbs_down_action"
+        if (liked && custom.contains(up)) {
+            controller.transportControls.sendCustomAction(up, null)
+            return null
+        }
+        if (!liked && custom.contains(down)) {
+            controller.transportControls.sendCustomAction(down, null)
+            return null
+        }
+
         val rating = when (controller.ratingType) {
             Rating.RATING_HEART -> Rating.newHeartRating(liked)
             Rating.RATING_THUMB_UP_DOWN -> Rating.newThumbRating(liked)
@@ -202,6 +214,10 @@ class MediaRepository private constructor(private val appContext: Context) {
                 "rating is not supported by this player"
             )
         }
+        // Framework TransportControls only has setRating(Rating) for the current item.
+        controller.transportControls.setRating(rating)
+        return null
+    }
         // Framework TransportControls only has setRating(Rating) for the current item.
         controller.transportControls.setRating(rating)
         return null
