@@ -15,7 +15,10 @@ using Microsoft.Extensions.Logging;
 namespace ScrcpyBar.Bridge;
 
 /// <summary>One synchronised lyric line.</summary>
-public record LyricLine(long TimeMs, string Text);
+public record LyricLine(long TimeMs, string Text, List<LyricWord> Words);
+
+/// <summary>One word inside a synchronised line. EndMs is 0 when unknown.</summary>
+public record LyricWord(long TimeMs, long EndMs, string Text);
 
 public record LyricsResult(
     bool Found,
@@ -876,7 +879,7 @@ public class LyricsService
 
     /// <summary>
     /// lrcmux (https://lrcmux-api.fly.dev): fan-out aggregator over public providers.
-    /// Single /get call returns LRC text. Keyless.
+    /// JSON with level=word carries per-word timings when the upstream has them.
     /// </summary>
     private async Task<LyricsResult?> FetchLrcmuxAsync(string rawTitle, string rawArtist, string title, string artist, int durationSeconds)
     {
@@ -891,19 +894,70 @@ public class LyricsService
         string url = "https://lrcmux-api.fly.dev/get?artist=" + Uri.EscapeDataString(Clean(rawArtist)) +
                      "&title=" + Uri.EscapeDataString(Clean(rawTitle)) +
                      (durationSeconds > 0 ? "&duration=" + durationSeconds.ToString(CultureInfo.InvariantCulture) : "") +
-                     "&format=lrc";
-        var (ok, body) = await GetTextAsync(provider, url);
-        if (!ok)
+                     "&level=word&format=json";
+        var (ok, element) = await GetJsonAsync(provider, url);
+        if (!ok || element.ValueKind != JsonValueKind.Object)
         {
             return IsPaused(provider)
                 ? new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable")
                 : null;
         }
 
-        var lines = ParseLrc(body);
-        if (lines.Count > 0)
+        string trackTitle = "";
+        if (element.TryGetProperty("track", out var track) && track.ValueKind == JsonValueKind.Object)
         {
-            return new LyricsResult(true, false, "", lines, "lrcmux");
+            trackTitle = track.TryGetProperty("title", out var tt) && tt.ValueKind == JsonValueKind.String
+                ? tt.GetString() ?? ""
+                : "";
+        }
+        string version = ExtractVersionLabel(trackTitle, "");
+
+        if (!element.TryGetProperty("lines", out var lines) || lines.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var result = new List<LyricLine>();
+        foreach (var item in lines.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+            string text = item.TryGetProperty("text", out var tx) && tx.ValueKind == JsonValueKind.String
+                ? (tx.GetString() ?? "").Trim()
+                : "";
+            if (text.Length == 0)
+            {
+                continue;
+            }
+            long start = JsonInt64(item, "start");
+            var words = new List<LyricWord>();
+            if (item.TryGetProperty("words", out var ws) && ws.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var w in ws.EnumerateArray())
+                {
+                    if (w.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+                    string wtext = w.TryGetProperty("text", out var wt) && wt.ValueKind == JsonValueKind.String
+                        ? (wt.GetString() ?? "").Trim()
+                        : "";
+                    if (wtext.Length == 0)
+                    {
+                        continue;
+                    }
+                    words.Add(new LyricWord(JsonInt64(w, "start"), JsonInt64(w, "end"), wtext));
+                }
+            }
+            result.Add(new LyricLine(start, text, words));
+        }
+        result.Sort((a, b) => a.TimeMs.CompareTo(b.TimeMs));
+
+        if (result.Count > 0)
+        {
+            return new LyricsResult(true, false, "", result, "lrcmux", version);
         }
         return null;
     }
@@ -1028,7 +1082,7 @@ public class LyricsService
         }
     }
 
-    /// <summary>Parses TTML paragraphs into timed lines, dropping the syllable spans.</summary>
+    /// <summary>Parses TTML paragraphs into timed lines, keeping word spans as words.</summary>
     internal static List<LyricLine> ParseTtml(string ttml)
     {
         var result = new List<LyricLine>();
@@ -1041,8 +1095,35 @@ public class LyricsService
                      @"<p\b[^>]*?\bbegin\s*=\s*""([^""]+)""[^>]*>(.*?)</p\s*>",
                      RegexOptions.Singleline | RegexOptions.IgnoreCase))
         {
+            string inner = match.Groups[2].Value;
+            var words = new List<LyricWord>();
+            foreach (Match span in Regex.Matches(inner,
+                         @"<span\b[^>]*?\bbegin\s*=\s*""([^""]+)""[^>]*>(.*?)</span\s*>",
+                         RegexOptions.Singleline | RegexOptions.IgnoreCase))
+            {
+                string wordText = System.Net.WebUtility.HtmlDecode(
+                    Regex.Replace(span.Groups[2].Value, @"<[^>]+>", "").Trim());
+                wordText = Regex.Replace(wordText, @"\s+", " ");
+                if (wordText.Length == 0)
+                {
+                    continue;
+                }
+                if (!TryParseTtmlTime(span.Groups[1].Value, out long wordMs))
+                {
+                    continue;
+                }
+                long wordEnd = 0;
+                var endAttr = Regex.Match(span.Value, @"\bend\s*=\s*""([^""]+)""", RegexOptions.IgnoreCase);
+                if (endAttr.Success)
+                {
+                    TryParseTtmlTime(endAttr.Groups[1].Value, out wordEnd);
+                }
+                words.Add(new LyricWord(wordMs, wordEnd, wordText));
+            }
+            words.Sort((a, b) => a.TimeMs.CompareTo(b.TimeMs));
+
             string text = System.Net.WebUtility.HtmlDecode(
-                Regex.Replace(match.Groups[2].Value, @"<[^>]+>", " ").Trim());
+                Regex.Replace(inner, @"<[^>]+>", " ").Trim());
             text = Regex.Replace(text, @"\s+", " ").Trim();
             if (text.Length == 0)
             {
@@ -1052,7 +1133,7 @@ public class LyricsService
             {
                 continue;
             }
-            result.Add(new LyricLine(timeMs, text));
+            result.Add(new LyricLine(timeMs, text, words));
         }
 
         result.Sort((a, b) => a.TimeMs.CompareTo(b.TimeMs));
@@ -1187,7 +1268,57 @@ public class LyricsService
 
         string plainPart = raw[..separator].Trim();
         string syncedPart = raw[(separator + "\n--synced--\n".Length)..];
+
+        // Optional per-word timings, grouped under the line start they belong to:
+        // L{lineMs} W{startMs}>{endMs} {word}
+        const string wordsMarker = "\n--words--\n";
+        string wordsRaw = "";
+        int wordsAt = syncedPart.IndexOf(wordsMarker, StringComparison.Ordinal);
+        if (wordsAt >= 0)
+        {
+            wordsRaw = syncedPart[(wordsAt + wordsMarker.Length)..];
+            syncedPart = syncedPart[..wordsAt];
+        }
         var lines = ParseLrc(syncedPart);
+        if (wordsRaw.Length > 0)
+        {
+            var byLine = new Dictionary<long, List<LyricWord>>();
+            foreach (var wordLine in wordsRaw.Split('\n'))
+            {
+                var m = Regex.Match(wordLine.Trim(), @"^L(\d+) W(\d+)>(\d+) (.*)$");
+                if (!m.Success)
+                {
+                    continue;
+                }
+                long lineMs = long.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+                var word = new LyricWord(
+                    long.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture),
+                    long.Parse(m.Groups[3].Value, CultureInfo.InvariantCulture),
+                    m.Groups[4].Value.Trim());
+                if (word.Text.Length == 0)
+                {
+                    continue;
+                }
+                if (!byLine.TryGetValue(lineMs, out var list))
+                {
+                    list = new List<LyricWord>();
+                    byLine[lineMs] = list;
+                }
+                list.Add(word);
+            }
+            if (byLine.Count > 0)
+            {
+                var merged = new List<LyricLine>(lines.Count);
+                foreach (var line in lines)
+                {
+                    merged.Add(byLine.TryGetValue(line.TimeMs, out var words)
+                        ? line with { Words = words }
+                        : line);
+                }
+                lines = merged;
+            }
+        }
+
         return new LyricsResult(true, false, plainPart, lines, source);
     }
 
@@ -1214,6 +1345,30 @@ public class LyricsService
                 builder.Append(']');
                 builder.Append(line.Text);
                 builder.Append('\n');
+            }
+            if (result.Lines.Any(line => line.Words.Count > 0))
+            {
+                builder.Append("\n--words--\n");
+                foreach (var line in result.Lines)
+                {
+                    foreach (var word in line.Words)
+                    {
+                        string cleanWord = word.Text.Replace('\n', ' ').Replace('\r', ' ').Trim();
+                        if (cleanWord.Length == 0)
+                        {
+                            continue;
+                        }
+                        builder.Append('L');
+                        builder.Append(line.TimeMs.ToString(CultureInfo.InvariantCulture));
+                        builder.Append(" W");
+                        builder.Append(word.TimeMs.ToString(CultureInfo.InvariantCulture));
+                        builder.Append('>');
+                        builder.Append(word.EndMs.ToString(CultureInfo.InvariantCulture));
+                        builder.Append(' ');
+                        builder.Append(cleanWord);
+                        builder.Append('\n');
+                    }
+                }
             }
         }
         builder.Append("\n--source--\n");
@@ -1250,7 +1405,9 @@ public class LyricsService
             var last = matches[^1];
             string text = line[(last.Index + last.Length)..].Trim();
             // Some providers (lrcmux word-sync) embed inline <mm:ss.xx> word stamps and
-            // lightweight markup inside the line text: strip them, keeping things like "<3".
+            // lightweight markup inside the line text: turn the stamps into words, then
+            // strip them, keeping things like "<3".
+            var words = ParseInlineWordStamps(text);
             text = Regex.Replace(text, @"<\d{1,3}:\d{1,2}(?:[.,]\d{1,3})?>", " ");
             text = Regex.Replace(text, @"<[a-zA-Z/][^<>]*>", " ");
             text = Regex.Replace(text, @"\s+", " ").Trim();
@@ -1279,12 +1436,52 @@ public class LyricsService
                     millis = int.Parse(fraction, CultureInfo.InvariantCulture);
                 }
 
-                result.Add(new LyricLine((minutes * 60L + seconds) * 1000L + millis, text));
+                result.Add(new LyricLine((minutes * 60L + seconds) * 1000L + millis, text, words));
             }
         }
 
         result.Sort((a, b) => a.TimeMs.CompareTo(b.TimeMs));
         return result;
+    }
+
+    /// <summary>Turns inline word stamps ("&lt;00:34.95&gt;Ночь &lt;00:35.46&gt;коротка")
+    /// into timed words. A word lasts until the next stamp starts.</summary>
+    internal static List<LyricWord> ParseInlineWordStamps(string text)
+    {
+        var words = new List<LyricWord>();
+        var stamps = new List<(long TimeMs, int Index, int Length)>();
+        foreach (Match match in Regex.Matches(text, @"<(\d{1,3}):(\d{1,2})(?:[.,](\d{1,3}))?>"))
+        {
+            int minutes = int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
+            int seconds = int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture);
+            string fraction = match.Groups[3].Value;
+            int millis = fraction.Length switch
+            {
+                1 => int.Parse(fraction, CultureInfo.InvariantCulture) * 100,
+                2 => int.Parse(fraction, CultureInfo.InvariantCulture) * 10,
+                3 => int.Parse(fraction, CultureInfo.InvariantCulture),
+                _ => 0,
+            };
+            stamps.Add((((minutes * 60L + seconds) * 1000L) + millis, match.Index, match.Length));
+        }
+        if (stamps.Count == 0)
+        {
+            return words;
+        }
+
+        for (int i = 0; i < stamps.Count; i++)
+        {
+            int textStart = stamps[i].Index + stamps[i].Length;
+            int textEnd = i + 1 < stamps.Count ? stamps[i + 1].Index : text.Length;
+            string word = Regex.Replace(text[textStart..textEnd], @"\s+", " ").Trim();
+            if (word.Length == 0)
+            {
+                continue;
+            }
+            long end = i + 1 < stamps.Count ? stamps[i + 1].TimeMs : 0;
+            words.Add(new LyricWord(stamps[i].TimeMs, end, word));
+        }
+        return words;
     }
 
     private static string Clean(string value)
@@ -1299,6 +1496,22 @@ public class LyricsService
         text = Regex.Replace(text, @"[\(\[\{][^\)\]\}]*[\)\]\}]", " ");
         text = Regex.Replace(text, @"\s+", " ").Trim();
         return text;
+    }
+
+    private static long JsonInt64(JsonElement element, string name)
+    {
+        if (element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number)
+        {
+            try
+            {
+                return (long)Math.Round(value.GetDouble());
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+        return 0;
     }
 
     private static string BuildKey(string artist, string title, long durationMs)

@@ -216,7 +216,12 @@ app.MapGet("/api/lyrics", async (AdbService adb, LyricsService lyrics, bool? ref
         // Tab separated "timeMs<TAB>text" per line. The widget parses this with a plain string
         // split because the WinRT JSON projection cannot walk a JSON array.
         linesText = string.Join("\n", result.Lines.Select(line => $"{line.TimeMs}\t{line.Text}")),
-        lines = result.Lines.Select(line => new { timeMs = line.TimeMs, text = line.Text })
+        lines = result.Lines.Select(line => new
+        {
+            timeMs = line.TimeMs,
+            text = line.Text,
+            words = line.Words.Select(word => new { t = word.TimeMs, e = word.EndMs, text = word.Text })
+        })
     });
 });
 

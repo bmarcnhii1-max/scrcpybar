@@ -10,6 +10,7 @@ using Windows.UI;
 
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
+using Windows.UI.Xaml.Documents;
 using Windows.UI.Xaml.Input;
 using Windows.UI.Xaml.Media;
 using Windows.UI.Xaml.Media.Animation;
@@ -62,10 +63,18 @@ namespace ScrcpyBar.Widget
         private int _curIndex = -1;
         private int _nextIndex = -1;
 
+        private sealed class LyricWord
+        {
+            public long TimeMs;
+            public long EndMs;
+            public string Text = "";
+        }
+
         private sealed class LyricLine
         {
             public long TimeMs;
             public string Text = "";
+            public List<LyricWord> Words = new List<LyricWord>();
         }
 
         public WidgetPage()
@@ -449,28 +458,74 @@ namespace ScrcpyBar.Widget
 
 
                 var parsed = new List<LyricLine>();
-                string linesText = json.GetNamedString("linesText", "");
-                if (!string.IsNullOrWhiteSpace(linesText))
+                // Structured lines (with per-word timings when the provider has them).
+                // linesText stays as a fallback for older bridge builds.
+                bool usedStructured = false;
+                if (json.TryGetValue("lines", out var linesValue) && linesValue.ValueType == JsonValueType.Array)
                 {
-                    foreach (var raw in linesText.Split('\n'))
+                    foreach (var lineValue in linesValue.GetArray())
                     {
-                        if (raw.Length == 0)
+                        if (lineValue.ValueType != JsonValueType.Object)
                         {
                             continue;
                         }
-
-                        int tab = raw.IndexOf('\t');
-                        if (tab <= 0)
+                        var lineObj = lineValue.GetObject();
+                        var line = new LyricLine
                         {
-                            continue;
-                        }
-
-                        if (!long.TryParse(raw.Substring(0, tab), out long timeMs))
+                            TimeMs = (long)lineObj.GetNamedNumber("timeMs", 0),
+                            Text = lineObj.GetNamedString("text", "")
+                        };
+                        if (lineObj.TryGetValue("words", out var wordsValue) && wordsValue.ValueType == JsonValueType.Array)
                         {
-                            continue;
+                            foreach (var wordValue in wordsValue.GetArray())
+                            {
+                                if (wordValue.ValueType != JsonValueType.Object)
+                                {
+                                    continue;
+                                }
+                                var wordObj = wordValue.GetObject();
+                                string wordText = wordObj.GetNamedString("text", "");
+                                if (wordText.Length == 0)
+                                {
+                                    continue;
+                                }
+                                line.Words.Add(new LyricWord
+                                {
+                                    TimeMs = (long)wordObj.GetNamedNumber("t", 0),
+                                    EndMs = (long)wordObj.GetNamedNumber("e", 0),
+                                    Text = wordText
+                                });
+                            }
                         }
+                        parsed.Add(line);
+                    }
+                    usedStructured = parsed.Count > 0;
+                }
+                if (!usedStructured)
+                {
+                    string linesText = json.GetNamedString("linesText", "");
+                    if (!string.IsNullOrWhiteSpace(linesText))
+                    {
+                        foreach (var raw in linesText.Split('\n'))
+                        {
+                            if (raw.Length == 0)
+                            {
+                                continue;
+                            }
 
-                        parsed.Add(new LyricLine { TimeMs = timeMs, Text = raw.Substring(tab + 1) });
+                            int tab = raw.IndexOf('\t');
+                            if (tab <= 0)
+                            {
+                                continue;
+                            }
+
+                            if (!long.TryParse(raw.Substring(0, tab), out long timeMs))
+                            {
+                                continue;
+                            }
+
+                            parsed.Add(new LyricLine { TimeMs = timeMs, Text = raw.Substring(tab + 1) });
+                        }
                     }
                 }
 
@@ -569,7 +624,7 @@ namespace ScrcpyBar.Widget
                 AnimateLyricChange();
             }
 
-            SetCurrentLine(current.Text);
+            SetCurrentLineWords(current, position);
         }
 
         // ---------------------------------------------------------------- animations
@@ -659,7 +714,60 @@ namespace ScrcpyBar.Widget
             }
 
             _karaokeText = text;
+            _curWordRuns.Clear();
             LyricCur.Text = text;
+        }
+
+        private readonly SolidColorBrush _wordSungBrush =
+            new SolidColorBrush(Color.FromArgb(255, 249, 250, 251));
+        private readonly SolidColorBrush _wordTodoBrush =
+            new SolidColorBrush(Color.FromArgb(255, 107, 114, 128));
+        private List<(Run Run, long StartMs)> _curWordRuns =
+            new List<(Run, long)>();
+
+        /// <summary>
+        /// Word-by-word karaoke: the line is split into runs once, then every 100 ms tick
+        /// only flips run colors. Lines without word timings fall back to plain text.
+        /// </summary>
+        private void SetCurrentLineWords(LyricLine line, double positionMs)
+        {
+            if (_karaokeText != line.Text)
+            {
+                _karaokeText = line.Text;
+                LyricCur.Inlines.Clear();
+                _curWordRuns.Clear();
+                if (line.Words.Count == 0)
+                {
+                    LyricCur.Text = line.Text;
+                }
+                else
+                {
+                    foreach (var word in line.Words)
+                    {
+                        var run = new Run { Text = word.Text };
+                        LyricCur.Inlines.Add(run);
+                        _curWordRuns.Add((run, word.TimeMs));
+                    }
+                }
+            }
+            UpdateWordColors(positionMs);
+        }
+
+        private void UpdateWordColors(double positionMs)
+        {
+            if (_curWordRuns.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var (run, startMs) in _curWordRuns)
+            {
+                var want = positionMs >= startMs ? _wordSungBrush : _wordTodoBrush;
+                if (!ReferenceEquals(run.Foreground, want))
+                {
+                    run.Foreground = want;
+                }
+            }
         }
 
         private static void SetLyricText(TextBlock block, string text)
