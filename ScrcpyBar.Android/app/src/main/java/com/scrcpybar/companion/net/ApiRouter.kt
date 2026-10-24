@@ -106,7 +106,10 @@ class ApiRouter(
             put("facts", facts)
             put("serverTimeMs", System.currentTimeMillis())
         }, NO_CACHE)
-    }        if (!authorized(request)) return unauthorized()
+    }
+
+    private fun sessions(request: HttpRequest): HttpResponse {
+        if (!authorized(request)) return unauthorized()
 
         val accessError = repository.accessError
         val list = repository.sessions()
