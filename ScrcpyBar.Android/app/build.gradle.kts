@@ -14,16 +14,28 @@ android {
         applicationId = "com.scrcpybar.companion"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.2"
+        versionCode = 3
+        versionName = "1.0.3"
 
         buildConfigField("int", "DEFAULT_PORT", "38080")
         buildConfigField("String", "API_VERSION", "\"1\"")
     }
 
+    // Shared debug key lives in the repo so local and CI builds carry the same
+    // signature and install as updates over each other. Debug-only, never trusted.
+    signingConfigs {
+        create("sharedDebug") {
+            storeFile = rootProject.file("debug.keystore")
+            storePassword = "scrcpybar"
+            keyAlias = "scrcpybar-debug"
+            keyPassword = "scrcpybar"
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("sharedDebug")
         }
         release {
             isMinifyEnabled = false
