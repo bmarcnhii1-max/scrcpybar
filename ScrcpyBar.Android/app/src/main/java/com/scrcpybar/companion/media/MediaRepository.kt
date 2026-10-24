@@ -189,20 +189,19 @@ class MediaRepository private constructor(private val appContext: Context) {
     // ---------------------------------------------------------------- internals
 
     /**
-     * Likes via the player's own channel: YouTube Music honors thumbs_up_action /
-     * thumbs_down_action custom actions while silently ignoring direct setRating calls.
-     * Falls back to a heart/thumb rating for players without those actions.
+     * Likes via the player's own channel: YouTube Music honors the thumbs_up_action custom
+     * action (a toggle: tap to like, tap again to unlike) while silently ignoring direct
+     * setRating calls. Falls back to a heart/thumb rating for players without that action.
      */
     private fun setLiked(controller: MediaController, liked: Boolean): ControlResult? {
-        val custom = controller.playbackState?.customActions?.map { it.action }.orEmpty()
-        val up = "thumbs_up_action"
-        val down = "thumbs_down_action"
-        if (liked && custom.contains(up)) {
-            controller.transportControls.sendCustomAction(up, null)
-            return null
-        }
-        if (!liked && custom.contains(down)) {
-            controller.transportControls.sendCustomAction(down, null)
+        val custom = controller.playbackState?.customActions.orEmpty()
+        val up = custom.find { it.action == "thumbs_up_action" }
+        if (up != null) {
+            // Toggle semantics live on this one action; the player flips like on/off.
+            // Only send when it would change the state to avoid double toggles.
+            if (isLikedFromCustomActions(listOf(up)) != liked) {
+                controller.transportControls.sendCustomAction("thumbs_up_action", null)
+            }
             return null
         }
 
@@ -217,6 +216,25 @@ class MediaRepository private constructor(private val appContext: Context) {
         // Framework TransportControls only has setRating(Rating) for the current item.
         controller.transportControls.setRating(rating)
         return null
+    }
+
+    /**
+     * YouTube Music never publishes the rating into metadata, but its thumbs_up_action
+     * display name flips with the state ("like" vs "cancel like" in the device locale).
+     * Returns null when the state cannot be read.
+     */
+    private fun isLikedFromCustomActions(actions: List<*>): Boolean? {
+        val up = actions.filterIsInstance<PlaybackState.CustomAction>()
+            .find { it.action == "thumbs_up_action" } ?: return null
+        val name = (up.name?.toString() ?: return null).lowercase()
+        // "Cancel/remove the like" in the languages we have seen (uk/ru/en).
+        if (name.contains("скасуват") || name.contains("отмен") || name.contains("убрать") ||
+            name.contains("cancel") || name.contains("remove") || name.contains("unlike") ||
+            name.contains("unrate") || name.contains("delete")
+        ) {
+            return true
+        }
+        return false
     }
 
     private fun isCurrentlyPlaying(controller: MediaController): Boolean = when (controller.playbackState?.state) {
@@ -251,12 +269,15 @@ class MediaRepository private constructor(private val appContext: Context) {
 
         val ratingType = controller.ratingType
         val rating = metadata?.getRating(MediaMetadata.METADATA_KEY_RATING)
+        // YouTube Music never publishes the rating into metadata: read the state from
+        // its thumbs_up_action display name first, metadata rating second.
         // Unrated but supported players report "not liked" so the button stays visible.
         val isLiked: Boolean? =
-            if (ratingType != Rating.RATING_HEART && ratingType != Rating.RATING_THUMB_UP_DOWN) null
-            else if (rating?.isRated != true) false
-            else if (ratingType == Rating.RATING_HEART) rating.hasHeart()
-            else rating.isThumbUp
+            isLikedFromCustomActions(controller.playbackState?.customActions.orEmpty())
+                ?: if (ratingType != Rating.RATING_HEART && ratingType != Rating.RATING_THUMB_UP_DOWN) null
+                else if (rating?.isRated != true) false
+                else if (ratingType == Rating.RATING_HEART) rating.hasHeart()
+                else rating.isThumbUp
 
         return MediaSnapshot(
             packageName = packageName,
