@@ -105,6 +105,21 @@ class MediaRepository private constructor(private val appContext: Context) {
         return snapshotList.mapNotNull { snapshotOf(it) }
     }
 
+    /** Diagnostic: raw session facts (custom actions, ids) for players that ignore ratings. */
+    fun sessionFacts(packageName: String? = null): JSONObject? {
+        refresh()
+        val controller = synchronized(lock) { selectControllerLocked(packageName) } ?: return null
+        val metadata = controller.metadata
+        return JSONObject().apply {
+            put("packageName", controller.packageName ?: JSONObject.NULL)
+            put("ratingType", controller.ratingType)
+            put("mediaId", metadata?.description?.mediaId ?: JSONObject.NULL)
+            put("customActions", JSONArray().apply {
+                controller.playbackState?.customActions?.forEach { put(it.action) }
+            })
+        }
+    }
+
     fun snapshot(packageName: String? = null): MediaSnapshot? {
         refresh()
         val controller = synchronized(lock) { selectControllerLocked(packageName) } ?: return null
@@ -185,7 +200,14 @@ class MediaRepository private constructor(private val appContext: Context) {
                 "rating is not supported by this player"
             )
         }
-        controller.transportControls.setRating(rating)
+        // Prefer the media-item overload: some players (YouTube Music) ignore the
+        // bare setRating but honor the one bound to the current media id.
+        val mediaId = controller.metadata?.description?.mediaId
+        if (mediaId != null) {
+            controller.transportControls.setRating(mediaId, rating)
+        } else {
+            controller.transportControls.setRating(rating)
+        }
         return null
     }
 

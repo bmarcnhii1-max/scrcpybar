@@ -48,6 +48,7 @@ class ApiRouter(
             path == "/sessions" -> sessions(request)
             path == "/artwork" -> artwork(request)
             path == "/control" -> control(request)
+            path == "/facts" -> facts(request)
             else -> error(404, "unknown endpoint '$path'")
         }
     }
@@ -94,7 +95,18 @@ class ApiRouter(
     }
 
     private fun sessions(request: HttpRequest): HttpResponse {
+
+    private fun facts(request: HttpRequest): HttpResponse {
         if (!authorized(request)) return unauthorized()
+
+        val facts = repository.sessionFacts(request.queryParam("packageName"))
+            ?: return error(HttpErrors.NO_SESSION, "no active media session")
+        return HttpResponse.json(HttpResponse.OK, JSONObject().apply {
+            put("ok", true)
+            put("facts", facts)
+            put("serverTimeMs", System.currentTimeMillis())
+        }, NO_CACHE)
+    }        if (!authorized(request)) return unauthorized()
 
         val accessError = repository.accessError
         val list = repository.sessions()
