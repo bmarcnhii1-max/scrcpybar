@@ -396,6 +396,7 @@ namespace ScrcpyBar.Widget
                 bool synced = json.GetNamedBoolean("synced", false);
                 string plain = json.GetNamedString("plain", "");
                 string version = json.GetNamedString("version", "");
+                string source = json.GetNamedString("source", "lrclib");
                 _lyricsUnavailable = !found && !instrumental;
 
             if (instrumental)
@@ -468,8 +469,8 @@ namespace ScrcpyBar.Widget
                 // the label names it so a masked line is not a mystery.
                 string versionSuffix = string.IsNullOrEmpty(version) ? "" : " " + version;
                 LyricsStatus.Text = synced
-                    ? "Синхронные слова" + versionSuffix + " · lrclib.net"
-                    : "Слова песни" + versionSuffix + " · lrclib.net";
+                    ? "Синхронные слова" + versionSuffix + " · " + source
+                    : "Слова песни" + versionSuffix + " · " + source;
 
                 if (_lyrics.Count == 0)
                 {

@@ -34,7 +34,8 @@ public record LyricsResult(
 /// </summary>
 public class LyricsService
 {
-    private const string ApiBase = "https://lrclib.net/api";
+    private const string LrclibApiBase = "https://lrclib.net/api";
+    private const string BetterLyricsApiBase = "https://api.betterlyrics.org";
     private const string CacheDirectoryName = "lyrics-cache";
     private const string UserAgent = "ScrcpyBar/1.0 (Windows Game Bar music widget)";
 
@@ -46,8 +47,19 @@ public class LyricsService
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly Dictionary<string, CachedLyrics> _memory = new(StringComparer.Ordinal);
 
-    private DateTime _serviceUnavailableUntil = DateTime.MinValue;
-    private int _unavailableStrikes;
+    /// <summary>Per-provider throttle state: one API being busy must not mute the other.</summary>
+    private sealed class ProviderBackoff
+    {
+        public DateTime PausedUntil = DateTime.MinValue;
+        public int Strikes;
+        public int SuccessStreak;
+    }
+
+    private readonly Dictionary<string, ProviderBackoff> _backoff = new(StringComparer.Ordinal)
+    {
+        ["lrclib"] = new(),
+        ["better-lyrics"] = new(),
+    };
     private readonly Dictionary<string, DateTime> _lastAttemptAt = new(StringComparer.Ordinal);
 
     /// <summary>When a track may be retried after a failed lookup (throttle/network noise).</summary>
@@ -185,12 +197,6 @@ public class LyricsService
 
     private async Task<LyricsResult> FetchAsync(string rawTitle, string rawArtist, string title, string artist, long durationMs)
     {
-        // Throttled: skip the network entirely so the warmup does not re-open the ban window.
-        if (DateTime.UtcNow < _serviceUnavailableUntil)
-        {
-            return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
-        }
-
         try
         {
             return await FetchCoreAsync(rawTitle, rawArtist, title, artist, durationMs);
@@ -206,6 +212,27 @@ public class LyricsService
     private async Task<LyricsResult> FetchCoreAsync(string rawTitle, string rawArtist, string title, string artist, long durationMs)
     {
         int durationSeconds = durationMs > 0 ? (int)(durationMs / 1000) : 0;
+
+        // 0. better-lyrics first: its catalog (lrc.red by ISRC + upstream) is a superset of
+        //    lrclib's, cache hits are keyless and generous, and TTML carries syllable timing.
+        //    Anything it cannot serve (401/404/empty) falls through to lrclib below.
+        var better = await FetchBetterLyricsAsync(rawTitle, rawArtist, durationSeconds);
+        if (better != null)
+        {
+            if (better.Found)
+            {
+                return better;
+            }
+            if (better.Source == "unavailable")
+            {
+                // better-lyrics is throttled, but lrclib is a different backend and may answer.
+                // Only give up early when lrclib is paused too.
+                if (IsPaused("lrclib"))
+                {
+                    return better;
+                }
+            }
+        }
 
         // 1-2. Exact /get matches. A plain-only hit is kept as a fallback, not returned
         //      immediately: lrclib often hosts several entries per song and /get can land on
@@ -225,12 +252,12 @@ public class LyricsService
                 return null; // identical to the previous request
             }
 
-            var (ok, result) = await GetJsonAsync(path);
+            var (ok, result) = await GetJsonAsync("lrclib", LrclibApiBase + path);
             if (!ok)
             {
                 return null;
             }
-            var parsed = FromJson(result, "lrclib:get");
+            var parsed = FromJson(result, "lrclib");
             if (parsed.Lines.Count > 0)
             {
                 return parsed;
@@ -246,7 +273,7 @@ public class LyricsService
             {
                 return dated;
             }
-            if (DateTime.UtcNow < _serviceUnavailableUntil)
+            if (IsPaused("lrclib"))
             {
                 return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
             }
@@ -257,7 +284,7 @@ public class LyricsService
         {
             return direct;
         }
-        if (DateTime.UtcNow < _serviceUnavailableUntil)
+        if (IsPaused("lrclib"))
         {
             return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
         }
@@ -268,16 +295,16 @@ public class LyricsService
         //    result counts as a failure and still opens the track-only fallback.
         string trackQuery = Uri.EscapeDataString(title);
         string artistQuery = Uri.EscapeDataString(artist);
-        var (searchOk, searchResult) = await GetJsonAsync(
-            $"/search?track_name={trackQuery}&artist_name={artistQuery}");
+        var (searchOk, searchResult) = await GetJsonAsync("lrclib",
+            LrclibApiBase + $"/search?track_name={trackQuery}&artist_name={artistQuery}");
         if (!searchOk || searchResult.ValueKind != JsonValueKind.Array ||
             !searchResult.EnumerateArray().Any())
         {
             searchOk = false;
         }
-        if (!searchOk && DateTime.UtcNow >= _serviceUnavailableUntil)
+        if (!searchOk && !IsPaused("lrclib"))
         {
-            (searchOk, searchResult) = await GetJsonAsync($"/search?q={trackQuery}");
+            (searchOk, searchResult) = await GetJsonAsync("lrclib", LrclibApiBase + $"/search?q={trackQuery}");
             if (!searchOk || searchResult.ValueKind != JsonValueKind.Array)
             {
                 searchOk = false;
@@ -310,7 +337,7 @@ public class LyricsService
         {
             return null;
         }
-        if (DateTime.UtcNow < _serviceUnavailableUntil)
+        if (IsPaused("lrclib"))
         {
             return null;
         }
@@ -536,61 +563,260 @@ public class LyricsService
         return "";
     }
 
-    private async Task<(bool Ok, JsonElement Element)> GetJsonAsync(string path)
+    private static bool IsPaused(ProviderBackoff state) =>
+        DateTime.UtcNow < state.PausedUntil;
+
+    private bool IsPaused(string provider) =>
+        _backoff.TryGetValue(provider, out var state) && IsPaused(state);
+
+    /// <summary>Escalating pause (2m, 4m, 8m... capped at 30m). Strikes reset only after
+    /// a streak of successes, so one lucky hit between bans does not reopen the floodgate.</summary>
+    private void NoteStrike(string provider, TimeSpan? retryAfter = null)
     {
-        // lrclib goes down or throttles from time to time. Backing off keeps the warmup from
-        // hammering it every few seconds while it is unavailable.
-        if (DateTime.UtcNow < _serviceUnavailableUntil)
+        if (!_backoff.TryGetValue(provider, out var state))
+        {
+            return;
+        }
+
+        state.Strikes++;
+        state.SuccessStreak = 0;
+        double seconds = 120.0 * Math.Pow(2, Math.Min(state.Strikes - 1, 4));
+        TimeSpan pause = TimeSpan.FromSeconds(Math.Min(seconds, 30.0 * 60.0));
+        if (retryAfter is TimeSpan delta && delta > pause)
+        {
+            pause = delta;
+        }
+
+        state.PausedUntil = DateTime.UtcNow + pause;
+        _logger.LogWarning(
+            "{Provider} is unavailable, pausing lookups for {Minutes} minutes (strike {Strike})",
+            provider, pause.TotalMinutes, state.Strikes);
+    }
+
+    private void NoteSuccess(string provider)
+    {
+        if (!_backoff.TryGetValue(provider, out var state))
+        {
+            return;
+        }
+
+        state.SuccessStreak++;
+        if (state.SuccessStreak >= 5)
+        {
+            state.Strikes = 0;
+        }
+    }
+
+    private static TimeSpan? RetryAfterOf(HttpResponseMessage response)
+    {
+        var retryAfter = response.Headers.RetryAfter;
+        if (retryAfter?.Delta is TimeSpan delta)
+        {
+            return delta;
+        }
+        if (retryAfter?.Date is DateTimeOffset date)
+        {
+            TimeSpan untilDate = date.UtcDateTime - DateTime.UtcNow;
+            if (untilDate > TimeSpan.Zero)
+            {
+                return untilDate;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// better-lyrics (https://api.betterlyrics.org): TTML with syllable timing, backed by
+    /// lrc.red's ISRC catalog. Cache hits are keyless; uncached queries answer 401 and the
+    /// Kugou endpoint (LRC text, never needs a key) is tried next. Returns null when this
+    /// provider has no answer and lrclib should be tried.
+    /// </summary>
+    private async Task<LyricsResult?> FetchBetterLyricsAsync(string rawTitle, string rawArtist, int durationSeconds)
+    {
+        const string provider = "better-lyrics";
+        if (string.IsNullOrWhiteSpace(rawTitle) || IsPaused(provider))
+        {
+            return IsPaused(provider)
+                ? new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable")
+                : null;
+        }
+
+        string s = Uri.EscapeDataString(Clean(rawTitle));
+        string a = Uri.EscapeDataString(Clean(rawArtist));
+        string d = durationSeconds > 0 ? durationSeconds.ToString(CultureInfo.InvariantCulture) : "";
+
+        // Main endpoint: best timing, but uncached queries need an API key we do not have.
+        var main = await GetBetterLyricsAsync($"/getLyrics?s={s}&a={a}&al=&d={d}");
+        if (main.Unavailable)
+        {
+            return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
+        }
+        if (main.Ok)
+        {
+            var lines = ParseTtml(main.Body);
+            if (lines.Count > 0)
+            {
+                NoteSuccess(provider);
+                return new LyricsResult(true, false, "", lines, "better-lyrics");
+            }
+            // 200 with no usable lines: the Kugou twin uses different cache keys, try it.
+        }
+
+        var kugou = await GetBetterLyricsAsync($"/kugou/getLyrics?s={s}&a={a}&al=&d={d}");
+        if (kugou.Unavailable)
+        {
+            return new LyricsResult(false, false, "", new List<LyricLine>(), "unavailable");
+        }
+        if (kugou.Ok)
+        {
+            var lines = ParseLrc(kugou.Body);
+            if (lines.Count > 0)
+            {
+                NoteSuccess(provider);
+                return new LyricsResult(true, false, "", lines, "better-lyrics");
+            }
+        }
+
+        return null;
+    }
+
+    private readonly record struct BetterLyricsResponse(bool Ok, bool Unavailable, string Body);
+
+    private async Task<BetterLyricsResponse> GetBetterLyricsAsync(string path)
+    {
+        const string provider = "better-lyrics";
+        if (IsPaused(provider))
+        {
+            return new BetterLyricsResponse(false, true, "");
+        }
+
+        try
+        {
+            using var response = await _http.GetAsync(BetterLyricsApiBase + path);
+            if (response.StatusCode == HttpStatusCode.NotFound ||
+                response.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                // 404 = nothing cached here (lrclib may still have it), 401 = uncached
+                // query without a key (Kugou twin may still answer). Neither is a ban.
+                NoteSuccess(provider);
+                return new BetterLyricsResponse(false, false, "");
+            }
+            if (response.StatusCode == HttpStatusCode.ServiceUnavailable ||
+                response.StatusCode == HttpStatusCode.TooManyRequests)
+            {
+                NoteStrike(provider, RetryAfterOf(response));
+                return new BetterLyricsResponse(false, true, "");
+            }
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("better-lyrics returned {Status} for {Path}", response.StatusCode, path);
+                return new BetterLyricsResponse(false, false, "");
+            }
+
+            string body = await response.Content.ReadAsStringAsync();
+            NoteSuccess(provider);
+            return new BetterLyricsResponse(true, false, body);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("better-lyrics request failed for {Path}: {Message}", path, ex.Message);
+            return new BetterLyricsResponse(false, false, "");
+        }
+    }
+
+    /// <summary>Parses TTML paragraphs into timed lines, dropping the syllable spans.</summary>
+    internal static List<LyricLine> ParseTtml(string ttml)
+    {
+        var result = new List<LyricLine>();
+        if (string.IsNullOrWhiteSpace(ttml))
+        {
+            return result;
+        }
+
+        foreach (Match match in Regex.Matches(ttml,
+                     @"<p\b[^>]*?\bbegin\s*=\s*""([^""]+)""[^>]*>(.*?)</p\s*>",
+                     RegexOptions.Singleline | RegexOptions.IgnoreCase))
+        {
+            string text = System.Net.WebUtility.HtmlDecode(
+                Regex.Replace(match.Groups[2].Value, @"<[^>]+>", " ").Trim());
+            text = Regex.Replace(text, @"\s+", " ").Trim();
+            if (text.Length == 0)
+            {
+                continue;
+            }
+            if (!TryParseTtmlTime(match.Groups[1].Value, out long timeMs))
+            {
+                continue;
+            }
+            result.Add(new LyricLine(timeMs, text));
+        }
+
+        result.Sort((a, b) => a.TimeMs.CompareTo(b.TimeMs));
+        return result;
+    }
+
+    private static bool TryParseTtmlTime(string value, out long timeMs)
+    {
+        timeMs = 0;
+        Match match = Regex.Match(value.Trim(), @"^(?:(\d+):)?([0-5]?\d):([0-5]?\d)(?:[.,](\d{1,3}))?$");
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        int hours = match.Groups[1].Success ? int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) : 0;
+        int minutes = int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture);
+        int seconds = int.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture);
+        int millis = 0;
+        string fraction = match.Groups[4].Value;
+        if (fraction.Length == 1)
+        {
+            millis = int.Parse(fraction, CultureInfo.InvariantCulture) * 100;
+        }
+        else if (fraction.Length == 2)
+        {
+            millis = int.Parse(fraction, CultureInfo.InvariantCulture) * 10;
+        }
+        else if (fraction.Length == 3)
+        {
+            millis = int.Parse(fraction, CultureInfo.InvariantCulture);
+        }
+
+        timeMs = ((hours * 60L + minutes) * 60L + seconds) * 1000L + millis;
+        return true;
+    }
+
+    private async Task<(bool Ok, JsonElement Element)> GetJsonAsync(string provider, string url)
+    {
+        // A throttled provider is skipped so the warmup does not re-open the ban window.
+        if (IsPaused(provider))
         {
             return (false, default);
         }
 
         try
         {
-            using var response = await _http.GetAsync(ApiBase + path);
+            using var response = await _http.GetAsync(url);
             if (response.StatusCode == HttpStatusCode.NotFound)
             {
+                NoteSuccess(provider);
                 return (false, default);
             }
             if (response.StatusCode == HttpStatusCode.ServiceUnavailable ||
                 response.StatusCode == HttpStatusCode.TooManyRequests)
             {
-                // lrclib answers "busy" to single requests all the time, so the first pause is
-                // short; only a client that keeps hitting the throttle escalates exponentially
-                // (30s, 1m, 2m, 4m... capped at 30 minutes).
-                _unavailableStrikes++;
-                double seconds = 30.0 * Math.Pow(2, Math.Min(_unavailableStrikes - 1, 6));
-                TimeSpan pause = TimeSpan.FromSeconds(Math.Min(seconds, 30.0 * 60.0));
-
-                var retryAfter = response.Headers.RetryAfter;
-                if (retryAfter?.Delta is TimeSpan delta && delta > pause)
-                {
-                    pause = delta;
-                }
-                else if (retryAfter?.Date is DateTimeOffset retryDate)
-                {
-                    TimeSpan untilDate = retryDate.UtcDateTime - DateTime.UtcNow;
-                    if (untilDate > pause)
-                    {
-                        pause = untilDate;
-                    }
-                }
-
-                _serviceUnavailableUntil = DateTime.UtcNow + pause;
-                _logger.LogWarning(
-                    "lrclib is unavailable, pausing lookups for {Minutes} minutes (strike {Strike})",
-                    pause.TotalMinutes, _unavailableStrikes);
+                NoteStrike(provider, RetryAfterOf(response));
                 return (false, default);
             }
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogWarning("lrclib returned {Status} for {Path}", response.StatusCode, path);
+                _logger.LogWarning("{Provider} returned {Status} for {Path}", provider, response.StatusCode, url);
                 return (false, default);
             }
 
             string body = await response.Content.ReadAsStringAsync();
             using var document = JsonDocument.Parse(body);
-            _unavailableStrikes = 0;
+            NoteSuccess(provider);
             return (true, document.RootElement.Clone());
         }
         catch (HttpRequestException ex) when ((ex.StatusCode ?? 0) == HttpStatusCode.TooManyRequests ||
@@ -598,17 +824,16 @@ public class LyricsService
         {
             // Reached when HttpClient surfaces the status as an exception (auto-decompress
             // failures, etc.) - apply the same backoff as the normal status path.
-            _unavailableStrikes++;
-            double seconds = 30.0 * Math.Pow(2, Math.Min(_unavailableStrikes - 1, 6));
-            _serviceUnavailableUntil = DateTime.UtcNow + TimeSpan.FromSeconds(Math.Min(seconds, 30.0 * 60.0));
+            NoteStrike(provider, null);
+            var state = _backoff[provider];
             _logger.LogWarning(
-                "lrclib unavailable via exception ({Status}), pausing for {Seconds}s (strike {Strike})",
-                ex.StatusCode, seconds, _unavailableStrikes);
+                "{Provider} unavailable via exception ({Status}), pausing (strike {Strike})",
+                provider, ex.StatusCode, state.Strikes);
             return (false, default);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning("lrclib request failed for {Path}: {Message}", path, ex.Message);
+            _logger.LogWarning("{Provider} request failed for {Path}: {Message}", provider, url, ex.Message);
             return (false, default);
         }
     }
@@ -634,42 +859,62 @@ public class LyricsService
     {
         // The cache file stores the plain lyrics followed by the timed ones so a plain-only
         // entry stays readable and the timed entry can be restored without a network call.
+        // A trailing "--source--" section remembers which provider served it; files written
+        // before that section existed are lrclib results.
+        string source = "lrclib";
+        const string sourceMarker = "\n--source--\n";
+        int sourceAt = raw.LastIndexOf(sourceMarker, StringComparison.Ordinal);
+        if (sourceAt >= 0)
+        {
+            source = raw[(sourceAt + sourceMarker.Length)..].Trim();
+            if (source.Length == 0)
+            {
+                source = "lrclib";
+            }
+            raw = raw[..sourceAt];
+        }
+
         int separator = raw.IndexOf("\n--synced--\n", StringComparison.Ordinal);
         if (separator < 0)
         {
             string plain = raw.Trim();
-            return new LyricsResult(plain.Length > 0, false, plain, new List<LyricLine>(), "cache");
+            return new LyricsResult(plain.Length > 0, false, plain, new List<LyricLine>(), source);
         }
 
         string plainPart = raw[..separator].Trim();
         string syncedPart = raw[(separator + "\n--synced--\n".Length)..];
         var lines = ParseLrc(syncedPart);
-        return new LyricsResult(true, false, plainPart, lines, "cache");
+        return new LyricsResult(true, false, plainPart, lines, source);
     }
 
     /// <summary>Stores plain lyrics and timed lyrics in one file so both survive a restart.</summary>
     private static string Serialize(LyricsResult result)
     {
+        var builder = new StringBuilder();
         if (result.Lines.Count == 0)
         {
-            return result.Plain;
+            builder.Append(result.Plain);
         }
-
-        var builder = new StringBuilder();
-        builder.Append(result.Plain);
-        builder.Append("\n--synced--\n");
-        foreach (var line in result.Lines)
+        else
         {
-            builder.Append('[');
-            builder.Append((line.TimeMs / 60000L).ToString("00", CultureInfo.InvariantCulture));
-            builder.Append(':');
-            builder.Append(((line.TimeMs % 60000L) / 1000L).ToString("00", CultureInfo.InvariantCulture));
-            builder.Append('.');
-            builder.Append((line.TimeMs % 1000L).ToString("000", CultureInfo.InvariantCulture));
-            builder.Append(']');
-            builder.Append(line.Text);
-            builder.Append('\n');
+            builder.Append(result.Plain);
+            builder.Append("\n--synced--\n");
+            foreach (var line in result.Lines)
+            {
+                builder.Append('[');
+                builder.Append((line.TimeMs / 60000L).ToString("00", CultureInfo.InvariantCulture));
+                builder.Append(':');
+                builder.Append(((line.TimeMs % 60000L) / 1000L).ToString("00", CultureInfo.InvariantCulture));
+                builder.Append('.');
+                builder.Append((line.TimeMs % 1000L).ToString("000", CultureInfo.InvariantCulture));
+                builder.Append(']');
+                builder.Append(line.Text);
+                builder.Append('\n');
+            }
         }
+        builder.Append("\n--source--\n");
+        builder.Append(string.IsNullOrWhiteSpace(result.Source) ? "lrclib" : result.Source.Trim());
+        builder.Append('\n');
         return builder.ToString();
     }
 

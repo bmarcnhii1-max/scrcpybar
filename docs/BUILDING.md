@@ -47,7 +47,7 @@ build/                     готовые артефакты релиза
 |---|---|---|
 | `GET` | `/api/track` | Трек, позиция, длительность, обложка |
 | `GET` | `/api/cover` | Обложка (JPEG/PNG) |
-| `GET` | `/api/lyrics` | Слова песни (`linesText` — `timeMs<TAB>текст`, `version` — метка версии вида `(Clean)`, если lrclib отдал не основной вариант) |
+| `GET` | `/api/lyrics` | Слова песни (`linesText` — `timeMs<TAB>текст`, `version` — метка версии вида `(Clean), source — better-lyrics/lrclib. Сначала беттер-ляркс (кеш без ключа, TTML), запасной — lrclib) |
 | `POST` | `/api/play-pause` | Пауза / воспроизведение |
 | `POST` | `/api/next` · `/api/prev` | Следующий / предыдущий трек |
 | `POST` | `/api/seek?seconds=±N` | Перемотка относительно (шаг ±300 с) |
