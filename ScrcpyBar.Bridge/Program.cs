@@ -346,11 +346,11 @@ body { background: var(--bg); background-image: radial-gradient(120px 120px at 1
 <div class="lyr-head"><span>Текст песни</span><span><span id="lyrSrc"></span> <button class="lyr-jump" id="lyrJump" onclick="jumpToCurrent()">▼ к строке</button></span></div>
 <div class="lyr-box" id="lyrBox"><div class="lyr-empty">загрузка...</div></div>
 </div>
-<div class="bot"><span>USB &middot; ADB</span><div class="vol"><button class="vbtn" onclick="control('vol-down')">-</button><span id="volLevel">-</span><button class="vbtn" onclick="control('vol-up')">+</button></div></div>
+<div class="bot"><span>USB &middot; ADB &middot; <span id="dashVer"></span></span><div class="vol"><button class="vbtn" onclick="control('vol-down')">-</button><span id="volLevel">-</span><button class="vbtn" onclick="control('vol-up')">+</button></div></div>
 </div>
 <script>
 let isPlaying = false, isLiked = null, posMs = 0, durMs = 0, stampMs = 0, coverKey = '';
-let lyrLines = [], lyrKey = '', lyrIdx = -1, lyrFollow = true, lyrAutoAt = 0;
+let lyrLines = [], lyrKey = '', lyrIdx = -1, lyrFollow = true, lyrAutoAt = 0, lyrAbort = null, lyrLoadingAt = 0;
 try { if (localStorage.getItem('lyr') === '0') { document.getElementById('lyrWrap').style.display = 'none'; document.getElementById('lyrBtn').classList.add('ghost-off'); } } catch (e) {}
 function toggleLyrics() {
     const w = document.getElementById('lyrWrap');
@@ -384,8 +384,11 @@ function updateJumpBtn() {
 }
 async function loadLyrics() {
     const box = $('lyrBox');
+    if (lyrAbort) { try { lyrAbort.abort(); } catch (e) {} }
+    lyrAbort = new AbortController();
+    lyrLoadingAt = Date.now();
     try {
-        const res = await fetch('/api/lyrics');
+        const res = await fetch('/api/lyrics', { signal: lyrAbort.signal });
         if (!res.ok) throw 0;
         const d = await res.json();
         $('lyrSrc').innerText = d.source ? '· ' + d.source : '';
@@ -412,6 +415,7 @@ async function loadLyrics() {
             box.innerHTML = '<div class="lyr-empty">текста нет</div>';
         }
     } catch (e) {
+        if (e && e.name === 'AbortError') return; // superseded by a newer track, not a failure
         box.innerHTML = '<div class="lyr-empty">текста нет</div>';
         lyrLines = [];
         lyrIdx = -1;
@@ -419,6 +423,7 @@ async function loadLyrics() {
 }
 const $ = id => document.getElementById(id);
 window.__lyrState = () => ({ idx: lyrIdx, follow: lyrFollow, lines: lyrLines.length });
+$('dashVer').innerText = 'v1.1.1c';
 const fmt = ms => { if (!ms || ms < 0) ms = 0; const s = Math.floor(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
 const curPos = () => posMs + (isPlaying ? Date.now() - stampMs : 0);
 async function updateTrack() {
@@ -426,6 +431,9 @@ async function updateTrack() {
         const res = await fetch('/api/track');
         if (!res.ok) throw 0;
         applyData(await res.json());
+        // Self-heal: if a lookup hung or died while the page stayed open, retry.
+        if (lyrLines.length === 0 && !$('lyrBox').querySelector('.lyr-line,.lyr-plain')
+            && Date.now() - lyrLoadingAt > 10000) loadLyrics();
     } catch (e) {
         $('statusDot').className = 'dot';
         $('statusText').innerText = 'офлайн';
@@ -492,6 +500,12 @@ function paintProg() {
             }
         }
         updateJumpBtn();
+        // Watchdog: the highlight must never silently vanish (desynced DOM,
+        // throttled tab, missed tick) — restore it instead of staying dark.
+        if (lyrIdx >= 0 && !$('lyrBox').querySelector('.cur')) {
+            const chd = $('lyrBox').children;
+            if (chd[lyrIdx]) chd[lyrIdx].classList.add('cur');
+        }
     }
 }
 async function control(action) {

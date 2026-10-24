@@ -646,6 +646,19 @@ public class LyricsService
     /// </summary>
     internal static LyricsResult WithEstimatedTiming(LyricsResult result, int durationSeconds)
     {
+        // Timings must be ascending: the dashboard and the widget both scan lines
+        // in order and stop at the first future line, so one shuffled provider
+        // response would freeze the highlight. Stable sort keeps lyric order on ties.
+        if (result.Lines.Count > 1)
+        {
+            var ordered = result.Lines
+                .Select((line, index) => (line, index))
+                .OrderBy(pair => pair.line.TimeMs)
+                .ThenBy(pair => pair.index)
+                .Select(pair => pair.line)
+                .ToList();
+            result = result with { Lines = ordered };
+        }
         if (result.Lines.Count > 0)
         {
             return WithEstimatedWords(result, durationSeconds);
