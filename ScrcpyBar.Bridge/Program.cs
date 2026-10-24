@@ -350,7 +350,7 @@ body { background: var(--bg); background-image: radial-gradient(120px 120px at 1
 </div>
 <script>
 let isPlaying = false, isLiked = null, posMs = 0, durMs = 0, stampMs = 0, coverKey = '';
-let lyrLines = [], lyrKey = '', lyrIdx = -1, lyrScrollAt = 0, lyrAutoAt = 0;
+let lyrLines = [], lyrKey = '', lyrIdx = -1, lyrFollow = true, lyrAutoAt = 0;
 try { if (localStorage.getItem('lyr') === '0') { document.getElementById('lyrWrap').style.display = 'none'; document.getElementById('lyrBtn').classList.add('ghost-off'); } } catch (e) {}
 function toggleLyrics() {
     const w = document.getElementById('lyrWrap');
@@ -360,19 +360,21 @@ function toggleLyrics() {
     try { localStorage.setItem('lyr', hidden ? '1' : '0'); } catch (e) {}
 }
 document.getElementById('lyrBox').addEventListener('scroll', () => {
-    // Programmatic follow-scrolls also fire scroll events: ignore those so the
-    // follow does not mistake itself for the user and mute itself.
-    if (Date.now() - lyrAutoAt > 500) lyrScrollAt = Date.now();
+    // Programmatic follow-scrolls also fire scroll events: ignore anything
+    // within the smooth-scroll window so the follow never mutes itself.
+    // A real manual scroll flips lyrFollow off until "к строке" is tapped.
+    if (Date.now() - lyrAutoAt > 800) lyrFollow = false;
 }, { passive: true });
-function followLine(el) {
+function followLine(el, instant) {
     const box = $('lyrBox');
     lyrAutoAt = Date.now();
-    box.scrollTo({ top: el.offsetTop - box.clientHeight / 2 + el.clientHeight / 2, behavior: 'smooth' });
+    box.scrollTo({ top: el.offsetTop - box.clientHeight / 2 + el.clientHeight / 2, behavior: instant ? 'auto' : 'smooth' });
 }
 function jumpToCurrent() {
-    lyrScrollAt = 0;
     const ch = $('lyrBox').children;
-    if (lyrIdx >= 0 && ch[lyrIdx]) followLine(ch[lyrIdx]);
+    lyrFollow = true;
+    if (lyrIdx >= 0 && ch[lyrIdx]) followLine(ch[lyrIdx], true);
+    updateJumpBtn();
 }
 function updateJumpBtn() {
     const box = $('lyrBox'), btn = $('lyrJump'), ch = box.children;
@@ -390,6 +392,7 @@ async function loadLyrics() {
         box.innerHTML = '';
         lyrLines = [];
         lyrIdx = -1;
+        lyrFollow = true;
         if (d.synced && d.lines && d.lines.length) {
             lyrLines = d.lines;
             d.lines.forEach(l => {
@@ -480,10 +483,11 @@ function paintProg() {
         if (idx !== lyrIdx) {
             const ch = $('lyrBox').children;
             if (lyrIdx >= 0 && ch[lyrIdx]) ch[lyrIdx].classList.remove('cur');
+            const jump = Math.abs(idx - lyrIdx) > 3;
             lyrIdx = idx;
             if (ch[idx]) {
                 ch[idx].classList.add('cur');
-                if (isPlaying && Date.now() - lyrScrollAt > 8000) followLine(ch[idx]);
+                if (isPlaying && lyrFollow) followLine(ch[idx], jump);
             }
         }
         updateJumpBtn();
