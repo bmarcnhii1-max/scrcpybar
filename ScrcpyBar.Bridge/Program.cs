@@ -305,6 +305,25 @@ body { background: var(--bg); background-image: radial-gradient(120px 120px at 1
 .vol { display: flex; align-items: center; gap: 4px; }
 .vbtn { background: rgba(255, 255, 255, 0.06); border: none; border-radius: 5px; color: var(--mut); min-width: 20px; height: 20px; cursor: pointer; font-size: 12px; font-weight: 700; }
 .vbtn:hover { background: rgba(255, 255, 255, 0.15); color: #fff; }
+.lyr-wrap { border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.lyr-head { display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: var(--mut); }
+.lyr-box { max-height: 180px; overflow-y: auto; font-size: 12px; line-height: 1.7; scrollbar-width: thin; overscroll-behavior: contain; }
+.lyr-line { color: var(--mut); white-space: pre-wrap; padding: 1px 6px; border-radius: 6px; }
+.lyr-line.cur { color: #fff; font-weight: 700; background: rgba(22, 163, 74, 0.18); }
+.lyr-plain { color: var(--mut); white-space: pre-wrap; }
+.lyr-empty { color: var(--mut); font-size: 11px; }
+.ghost-off { opacity: 0.45; }
+@media (max-width: 420px) {
+  body { padding: 8px; align-items: flex-start; }
+  .card { max-width: 100%; border-radius: 14px; }
+  .btn { width: 44px; height: 44px; }
+  .btn svg { width: 19px; height: 19px; }
+  .play { width: 56px; height: 56px; }
+  .play svg { width: 24px; height: 24px; }
+  .title { font-size: 15px; }
+  .art { width: 56px; height: 56px; }
+  .lyr-box { max-height: 42vh; font-size: 13px; }
+}
 </style>
 </head>
 <body>
@@ -320,11 +339,60 @@ body { background: var(--bg); background-image: radial-gradient(120px 120px at 1
 <button class="btn play" onclick="control('play-pause')" title="Пауза / играть"><svg id="playIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
 <button class="btn" onclick="control('next')" title="Вперед"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>
 <button class="btn like" id="likeBtn" onclick="toggleLike()" title="Нравится" style="display:none"><svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></button>
+<button class="btn" id="lyrBtn" onclick="toggleLyrics()" title="Текст песни"><svg viewBox="0 0 24 24"><path d="M4 5h16v2H4zm0 4h16v2H4zm0 4h10v2H4zm0 4h10v2H4z"/></svg></button>
+</div>
+<div class="lyr-wrap" id="lyrWrap">
+<div class="lyr-head"><span>Текст песни</span><span id="lyrSrc"></span></div>
+<div class="lyr-box" id="lyrBox"><div class="lyr-empty">загрузка...</div></div>
 </div>
 <div class="bot"><span>USB &middot; ADB</span><div class="vol"><button class="vbtn" onclick="control('vol-down')">-</button><span id="volLevel">-</span><button class="vbtn" onclick="control('vol-up')">+</button></div></div>
 </div>
 <script>
 let isPlaying = false, isLiked = null, posMs = 0, durMs = 0, stampMs = 0, coverKey = '';
+let lyrLines = [], lyrKey = '', lyrIdx = -1, lyrScrollAt = 0;
+try { if (localStorage.getItem('lyr') === '0') { document.getElementById('lyrWrap').style.display = 'none'; document.getElementById('lyrBtn').classList.add('ghost-off'); } } catch (e) {}
+function toggleLyrics() {
+    const w = document.getElementById('lyrWrap');
+    const hidden = w.style.display === 'none';
+    w.style.display = hidden ? 'flex' : 'none';
+    document.getElementById('lyrBtn').classList.toggle('ghost-off', !hidden);
+    try { localStorage.setItem('lyr', hidden ? '1' : '0'); } catch (e) {}
+}
+document.getElementById('lyrBox').addEventListener('scroll', () => { lyrScrollAt = Date.now(); }, { passive: true });
+async function loadLyrics() {
+    const box = $('lyrBox');
+    try {
+        const res = await fetch('/api/lyrics');
+        if (!res.ok) throw 0;
+        const d = await res.json();
+        $('lyrSrc').innerText = d.source ? '· ' + d.source : '';
+        box.innerHTML = '';
+        lyrLines = [];
+        lyrIdx = -1;
+        if (d.synced && d.lines && d.lines.length) {
+            lyrLines = d.lines;
+            d.lines.forEach(l => {
+                const div = document.createElement('div');
+                div.className = 'lyr-line';
+                div.textContent = (l.text ?? l.Text) || '';
+                box.appendChild(div);
+            });
+        } else if (d.plain) {
+            d.plain.split('\n').forEach(t => {
+                const div = document.createElement('div');
+                div.className = 'lyr-plain';
+                div.textContent = t;
+                box.appendChild(div);
+            });
+        } else {
+            box.innerHTML = '<div class="lyr-empty">текста нет</div>';
+        }
+    } catch (e) {
+        box.innerHTML = '<div class="lyr-empty">текста нет</div>';
+        lyrLines = [];
+        lyrIdx = -1;
+    }
+}
 const $ = id => document.getElementById(id);
 const fmt = ms => { if (!ms || ms < 0) ms = 0; const s = Math.floor(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
 const curPos = () => posMs + (isPlaying ? Date.now() - stampMs : 0);
@@ -370,6 +438,7 @@ function applyData(d) {
         img.onerror = () => $('artBox').classList.remove('has-art');
         img.src = '/api/cover?k=' + Date.now();
     }
+    if (key !== lyrKey) { lyrKey = key; loadLyrics(); }
     isLiked = d.isLiked === true ? true : d.isLiked === false ? false : null;
     const lb = $('likeBtn');
     lb.style.display = isLiked === null ? 'none' : 'flex';
@@ -381,6 +450,22 @@ function paintProg() {
     $('durTime').innerText = fmt(durMs);
     $('posTime').innerText = fmt(Math.min(p, durMs || p));
     $('progFill').style.width = (durMs > 0 ? Math.max(0, Math.min(1, p / durMs)) * 100 : 0) + '%';
+    if (lyrLines.length) {
+        let idx = 0;
+        for (let i = 0; i < lyrLines.length; i++) {
+            const t = lyrLines[i].timeMs ?? lyrLines[i].TimeMs;
+            if (p >= t) idx = i; else break;
+        }
+        if (idx !== lyrIdx) {
+            const ch = $('lyrBox').children;
+            if (lyrIdx >= 0 && ch[lyrIdx]) ch[lyrIdx].classList.remove('cur');
+            lyrIdx = idx;
+            if (ch[idx]) {
+                ch[idx].classList.add('cur');
+                if (Date.now() - lyrScrollAt > 8000) ch[idx].scrollIntoView({ block: 'nearest' });
+            }
+        }
+    }
 }
 async function control(action) {
     try {
