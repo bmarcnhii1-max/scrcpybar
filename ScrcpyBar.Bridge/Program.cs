@@ -111,6 +111,15 @@ app.MapPost("/api/play-pause", async (AdbService adb) =>
     return Results.Ok(track);
 });
 
+app.MapPost("/api/like", async (bool? value, AdbService adb) =>
+{
+    bool want = value ?? !(await adb.GetNowPlayingAsync()).IsLiked.GetValueOrDefault(false);
+    bool applied = await adb.LikeAsync(want);
+    await Task.Delay(350);
+    var track = await adb.GetNowPlayingAsync(forceRefresh: true);
+    return Results.Ok(new { ok = applied, track });
+});
+
 app.MapPost("/api/next", async (AdbService adb) =>
 {
     await adb.NextTrackAsync();
@@ -564,6 +573,9 @@ static string GetHtmlDashboard() => """
         <button class="btn-ctrl" id="nextBtn" title="Следующий (Next)" onclick="control('next')">
             <svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
         </button>
+        <button class="btn-ctrl" id="likeBtn" title="Нравится" onclick="toggleLike()" style="display:none">
+            <svg id="likeIcon" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+        </button>
     </div>
 
     <div class="footer">
@@ -579,6 +591,7 @@ static string GetHtmlDashboard() => """
 
 <script>
     let isPlaying = false;
+    let isLiked = null;
 
     async function updateTrack() {
         try {
@@ -634,6 +647,32 @@ static string GetHtmlDashboard() => """
 
         if (data.volumeCurrent !== undefined) {
             vol.innerText = data.volumeCurrent;
+        }
+
+        isLiked = data.isLiked === true ? true : data.isLiked === false ? false : null;
+        updateLikeButton();
+    }
+
+    function updateLikeButton() {
+        const btn = document.getElementById('likeBtn');
+        const icon = document.getElementById('likeIcon');
+        if (isLiked === null || isLiked === undefined) {
+            btn.style.display = 'none';
+            return;
+        }
+        btn.style.display = 'flex';
+        icon.style.fill = isLiked ? '#e5484d' : 'currentColor';
+    }
+
+    async function toggleLike() {
+        try {
+            const res = await fetch('/api/like', { method: 'POST' });
+            if (res.ok) {
+                const data = await res.json();
+                applyData(data.track || data);
+            }
+        } catch (e) {
+            console.error(e);
         }
     }
 

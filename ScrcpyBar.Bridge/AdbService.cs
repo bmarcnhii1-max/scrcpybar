@@ -32,6 +32,8 @@ public record TrackInfo(
     public long UpdatedMs { get; init; }
     public double Speed { get; init; } = 1.0;
     public string AlbumArtPath { get; init; } = "";
+    /// <summary>Heart state from the player; null when the player exposes no rating.</summary>
+    public bool? IsLiked { get; init; }
 }
 
 public class AdbService
@@ -568,7 +570,8 @@ public class AdbService
                 PositionMs = positionMs,
                 DurationMs = durationMs,
                 UpdatedMs = 0,
-                Speed = JsonDouble(session, "playbackSpeed", 1.0)
+                Speed = JsonDouble(session, "playbackSpeed", 1.0),
+                IsLiked = JsonNullableBoolean(session, "isLiked")
             };
         }
         catch (Exception ex)
@@ -608,6 +611,22 @@ public class AdbService
         return element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString() ?? fallback
             : fallback;
+    }
+
+    private static bool? JsonNullableBoolean(JsonElement element, string name)
+    {
+        if (element.TryGetProperty(name, out var value))
+        {
+            if (value.ValueKind == JsonValueKind.True)
+            {
+                return true;
+            }
+            if (value.ValueKind == JsonValueKind.False)
+            {
+                return false;
+            }
+        }
+        return null;
     }
 
     private static long JsonInt64(JsonElement element, string name)
@@ -1178,6 +1197,18 @@ public class AdbService
 
         await RunAdbCommandAsync(Adb("shell cmd media_session dispatch previous"), 2000);
         _cachedInfo = null;
+    }
+
+    /// <summary>Toggles the player's heart rating. Returns false when unsupported.</summary>
+    public async Task<bool> LikeAsync(bool liked)
+    {
+        if (!await TryCompanionControlAsync(liked ? "like" : "unlike"))
+        {
+            return false;
+        }
+
+        _cachedInfo = null;
+        return true;
     }
 
     public async Task SeekRelativeAsync(int seconds)

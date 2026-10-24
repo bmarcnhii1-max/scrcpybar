@@ -300,6 +300,15 @@
                         Click="Next_Click" ToolTipService.ToolTip="Следующий трек">
                     <FontIcon FontFamily="Segoe MDL2 Assets" Glyph="&#xE893;" FontSize="15" Foreground="#F3F4F6"/>
                 </Button>
+
+                <Button x:Name="LikeButton" Width="36" Height="36" Padding="0" CornerRadius="18"
+                        Style="{StaticResource Subtle}"
+                        Background="#15FFFFFF" BorderThickness="0"
+                        HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                        Click="Like_Click" ToolTipService.ToolTip="Нравится" Visibility="Collapsed">
+                    <TextBlock x:Name="LikeGlyph" Text="♥" FontSize="17" Foreground="#D1D5DB"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Button>
             </StackPanel>
 
             <!-- Refresh Button -->

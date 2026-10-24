@@ -7,6 +7,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadata
+import android.media.Rating
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
@@ -147,6 +148,8 @@ class MediaRepository private constructor(private val appContext: Context) {
                 "next" -> controls.skipToNext()
                 "previous" -> controls.skipToPrevious()
                 "stop" -> controls.stop()
+                "like" -> setHeart(controller, true)?.let { return it }
+                "unlike" -> setHeart(controller, false)?.let { return it }
                 "seek" -> {
                     val requested = action.positionMs
                         ?: return ControlResult.Failure(
@@ -167,6 +170,21 @@ class MediaRepository private constructor(private val appContext: Context) {
     }
 
     // ---------------------------------------------------------------- internals
+
+    /**
+     * Likes via MediaSession heart rating (YouTube Music and friends expose it).
+     * Returns null on success, a Failure when the player has no heart rating.
+     */
+    private fun setHeart(controller: MediaController, liked: Boolean): ControlResult? {
+        if (controller.ratingType != Rating.RATING_HEART) {
+            return ControlResult.Failure(
+                HttpErrors.BAD_REQUEST,
+                "rating is not supported by this player"
+            )
+        }
+        controller.transportControls.setRating(Rating.newHeartRating(liked))
+        return null
+    }
 
     private fun isCurrentlyPlaying(controller: MediaController): Boolean = when (controller.playbackState?.state) {
         PlaybackState.STATE_PLAYING,
@@ -198,6 +216,12 @@ class MediaRepository private constructor(private val appContext: Context) {
         val buffered = state?.bufferedPosition?.coerceAtLeast(0L) ?: 0L
         val speed = state?.playbackSpeed ?: 0f
 
+        val ratingType = controller.ratingType
+        val rating = metadata?.getRating(MediaMetadata.METADATA_KEY_RATING)
+        val isLiked: Boolean? =
+            if (ratingType == Rating.RATING_HEART && rating?.isRated == true) rating.hasHeart()
+            else null
+
         return MediaSnapshot(
             packageName = packageName,
             appLabel = labelOf(packageName),
@@ -211,7 +235,9 @@ class MediaRepository private constructor(private val appContext: Context) {
             playbackState = playbackState,
             isPlaying = playbackState == PlaybackState.STATE_PLAYING,
             artworkUri = artworkUriOf(metadata),
-            updatedAtEpochMs = System.currentTimeMillis()
+            updatedAtEpochMs = System.currentTimeMillis(),
+            ratingType = ratingType,
+            isLiked = isLiked
         )
     }
 

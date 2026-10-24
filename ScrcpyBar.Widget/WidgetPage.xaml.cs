@@ -28,6 +28,7 @@ namespace ScrcpyBar.Widget
         private static readonly string GlyphPlay = ((char)0xE768).ToString();
         private static readonly string GlyphPause = ((char)0xE769).ToString();
         private bool _isPlaying = false;
+    private bool? _isLiked;
         private bool _isSeeking;
         private double _durationSeconds;
         private double _positionSeconds;
@@ -175,15 +176,24 @@ namespace ScrcpyBar.Widget
                 ClearCover();
                 MusicIcon.Foreground = new SolidColorBrush(Color.FromArgb(255, 107, 114, 128));
                 PlayIcon.Glyph = GlyphPlay;
+                LikeButton.Visibility = Visibility.Collapsed;
                 return;
             }
 
             StatusDot.Fill = new SolidColorBrush(Color.FromArgb(255, 16, 185, 129)); // Green
             StatusText.Text = "Онлайн";
 
-            TrackTitleText.Text = string.IsNullOrWhiteSpace(title) ? "Нет трека" : title;
-            TrackArtistText.Text = string.IsNullOrWhiteSpace(artist) ? (hasTrack ? "" : "Запусти музыку на телефоне") : artist;
-            TrackAppText.Text = appName;
+                TrackTitleText.Text = string.IsNullOrWhiteSpace(title) ? "Нет трека" : title;
+                TrackArtistText.Text = string.IsNullOrWhiteSpace(artist) ? (hasTrack ? "" : "Запусти музыку на телефоне") : artist;
+                TrackAppText.Text = appName;
+
+                bool? isLiked = null;
+                if (json.TryGetValue("isLiked", out var likedValue) && likedValue.ValueType == JsonValueType.Boolean)
+                {
+                    isLiked = likedValue.GetBoolean();
+                }
+                _isLiked = isLiked;
+                UpdateLikeButton();
 
             // Log the decoded text so an encoding problem shows up in widget.log instead of
             // having to be guessed from a screenshot.
@@ -944,6 +954,45 @@ namespace ScrcpyBar.Widget
         private async void Next_Click(object sender, RoutedEventArgs e)
         {
             await SendCommandAsync("next");
+        }
+
+        private async void Like_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                bool want = !_isLiked.GetValueOrDefault(false);
+                var content = new StringContent(string.Empty);
+                var response = await _http.PostAsync(
+                    new Uri($"{BaseApi}/api/like?value={want.ToString().ToLowerInvariant()}"), content);
+                if (response.IsSuccessStatusCode)
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    if (JsonObject.TryParse(body, out JsonObject json) &&
+                        json.TryGetValue("track", out var trackValue) &&
+                        trackValue.ValueType == JsonValueType.Object)
+                    {
+                        ApplyTrackData(trackValue.GetObject());
+                    }
+                    else
+                    {
+                        await FetchTrackAsync();
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private void UpdateLikeButton()
+        {
+            if (!_isLiked.HasValue)
+            {
+                LikeButton.Visibility = Visibility.Collapsed;
+                return;
+            }
+            LikeButton.Visibility = Visibility.Visible;
+            LikeGlyph.Foreground = _isLiked.Value
+                ? new SolidColorBrush(Color.FromArgb(255, 229, 72, 77))
+                : new SolidColorBrush(Color.FromArgb(255, 209, 213, 219));
         }
 
         private async void VolUp_Click(object sender, RoutedEventArgs e)

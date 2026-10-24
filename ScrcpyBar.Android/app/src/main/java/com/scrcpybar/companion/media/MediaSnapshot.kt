@@ -20,7 +20,11 @@ data class MediaSnapshot(
     val playbackState: Int,
     val isPlaying: Boolean,
     val artworkUri: String?,
-    val updatedAtEpochMs: Long
+    val updatedAtEpochMs: Long,
+    /** MediaSession rating type (Rating.RATING_*): RATING_HEART means like/unlike works. */
+    val ratingType: Int,
+    /** Current heart state; null when the player exposes no rating. */
+    val isLiked: Boolean?
 ) {
 
     val stateName: String
@@ -64,6 +68,8 @@ data class MediaSnapshot(
         put("artworkUrl", artworkUrl ?: JSONObject.NULL)
         put("artworkUri", artworkUri ?: JSONObject.NULL)
         put("updatedAtEpochMs", updatedAtEpochMs)
+        put("ratingType", ratingType)
+        put("isLiked", isLiked ?: JSONObject.NULL)
         put("actions", JSONArray(capabilities()))
     }
 
@@ -75,7 +81,9 @@ data class MediaSnapshot(
             "next",
             "previous",
             "stop",
-            "seek"
+            "seek",
+            "like",
+            "unlike"
         )
     }
 }
