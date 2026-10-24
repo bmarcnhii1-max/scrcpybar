@@ -350,7 +350,7 @@ body { background: var(--bg); background-image: radial-gradient(120px 120px at 1
 </div>
 <script>
 let isPlaying = false, isLiked = null, posMs = 0, durMs = 0, stampMs = 0, coverKey = '';
-let lyrLines = [], lyrKey = '', lyrIdx = -1, lyrFollow = true, lyrAutoAt = 0, lyrAbort = null, lyrLoadingAt = 0;
+let lyrLines = [], lyrKey = '', lyrIdx = -1, lyrFollow = true, lyrAutoTarget = -1, lyrLastTop = -1, lyrAbort = null, lyrLoadingAt = 0;
 try { if (localStorage.getItem('lyr') === '0') { document.getElementById('lyrWrap').style.display = 'none'; document.getElementById('lyrBtn').classList.add('ghost-off'); } } catch (e) {}
 function toggleLyrics() {
     const w = document.getElementById('lyrWrap');
@@ -360,15 +360,27 @@ function toggleLyrics() {
     try { localStorage.setItem('lyr', hidden ? '1' : '0'); } catch (e) {}
 }
 document.getElementById('lyrBox').addEventListener('scroll', () => {
-    // Programmatic follow-scrolls also fire scroll events: ignore anything
-    // within the smooth-scroll window so the follow never mutes itself.
-    // A real manual scroll flips lyrFollow off until "к строке" is tapped.
-    if (Date.now() - lyrAutoAt > 800) lyrFollow = false;
+    // Our own smooth scrolls fire scroll events too. They always move toward
+    // the follow target, so only a scroll that moves away (or stalls off it)
+    // means the user took over — no time windows, nothing to mistime.
+    const box = $('lyrBox');
+    const top = box.scrollTop;
+    if (Math.abs(top - lyrAutoTarget) <= 2) { lyrLastTop = top; return; }
+    const closing = lyrLastTop >= 0 && Math.abs(top - lyrAutoTarget) < Math.abs(lyrLastTop - lyrAutoTarget) - 1;
+    lyrLastTop = top;
+    if (!closing) lyrFollow = false;
 }, { passive: true });
+function lineTop(el) {
+    // offsetTop is relative to the offsetParent (here: way above the box),
+    // so it cannot drive box.scrollTop. Measure against the box itself.
+    const box = $('lyrBox');
+    return el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
+}
 function followLine(el, instant) {
     const box = $('lyrBox');
-    lyrAutoAt = Date.now();
-    box.scrollTo({ top: el.offsetTop - box.clientHeight / 2 + el.clientHeight / 2, behavior: instant ? 'auto' : 'smooth' });
+    const target = lineTop(el) - box.clientHeight / 2 + el.clientHeight / 2;
+    lyrAutoTarget = target;
+    box.scrollTo({ top: target, behavior: instant ? 'auto' : 'smooth' });
 }
 function jumpToCurrent() {
     const ch = $('lyrBox').children;
@@ -379,7 +391,11 @@ function jumpToCurrent() {
 function updateJumpBtn() {
     const box = $('lyrBox'), btn = $('lyrJump'), ch = box.children;
     const el = lyrIdx >= 0 ? ch[lyrIdx] : null;
-    const out = !!el && (el.offsetTop < box.scrollTop || el.offsetTop + el.clientHeight > box.scrollTop + box.clientHeight);
+    let out = false;
+    if (el) {
+        const r = el.getBoundingClientRect(), b = box.getBoundingClientRect();
+        out = r.top < b.top - 1 || r.bottom > b.bottom + 1;
+    }
     btn.style.display = out ? 'inline-block' : 'none';
 }
 async function loadLyrics() {
@@ -396,6 +412,10 @@ async function loadLyrics() {
         lyrLines = [];
         lyrIdx = -1;
         lyrFollow = true;
+        // Clearing the box snaps scrollTop to 0 and fires a scroll event:
+        // aim the target there upfront so the reset is not mistaken for the user.
+        lyrAutoTarget = 0;
+        lyrLastTop = -1;
         if (d.synced && d.lines && d.lines.length) {
             lyrLines = d.lines;
             d.lines.forEach(l => {
@@ -423,7 +443,7 @@ async function loadLyrics() {
 }
 const $ = id => document.getElementById(id);
 window.__lyrState = () => ({ idx: lyrIdx, follow: lyrFollow, lines: lyrLines.length });
-$('dashVer').innerText = 'v1.1.1c';
+$('dashVer').innerText = 'v1.1.1e';
 const fmt = ms => { if (!ms || ms < 0) ms = 0; const s = Math.floor(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
 const curPos = () => posMs + (isPlaying ? Date.now() - stampMs : 0);
 async function updateTrack() {
