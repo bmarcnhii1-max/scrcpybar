@@ -1249,6 +1249,11 @@ public class LyricsService
 
             var last = matches[^1];
             string text = line[(last.Index + last.Length)..].Trim();
+            // Some providers (lrcmux word-sync) embed inline <mm:ss.xx> word stamps and
+            // lightweight markup inside the line text: strip them, keeping things like "<3".
+            text = Regex.Replace(text, @"<\d{1,3}:\d{1,2}(?:[.,]\d{1,3})?>", " ");
+            text = Regex.Replace(text, @"<[a-zA-Z/][^<>]*>", " ");
+            text = Regex.Replace(text, @"\s+", " ").Trim();
             if (text.Length == 0)
             {
                 continue;
