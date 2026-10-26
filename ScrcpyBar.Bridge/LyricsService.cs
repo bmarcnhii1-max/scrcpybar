@@ -221,10 +221,97 @@ public class LyricsService
         }
     }
 
+    private static readonly Dictionary<string, string> BuiltinPins = new(StringComparer.Ordinal)
+    {
+        // Gifts and hopeless search cases: normalized title -> lrc.red ISRC.
+        ["ход конем"] = "FR2X42525863",
+    };
+
+    private Dictionary<string, string>? _pins;
+
+    /// <summary>Pinned ISRCs: builtins plus pins.json in the data dir.</summary>
+    private Dictionary<string, string> Pins
+    {
+        get
+        {
+            if (_pins != null)
+            {
+                return _pins;
+            }
+
+            var table = new Dictionary<string, string>(BuiltinPins, StringComparer.Ordinal);
+            try
+            {
+                string path = Path.Combine(AppPaths.DataDir, "pins.json");
+                if (File.Exists(path))
+                {
+                    using var doc = JsonDocument.Parse(File.ReadAllText(path));
+                    if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                    {
+                        foreach (var prop in doc.RootElement.EnumerateObject())
+                        {
+                            if (prop.Value.ValueKind == JsonValueKind.String)
+                            {
+                                string isrc = (prop.Value.GetString() ?? "").Trim();
+                                if (isrc.Length > 0)
+                                {
+                                    table[Normalize(prop.Name)] = isrc;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Pins load failed: {Message}", ex.Message);
+            }
+
+            _pins = table;
+            return _pins;
+        }
+    }
+
+    /// <summary>Pinned ISRC first: skips search roulette for gifted tracks.</summary>
+    private async Task<LyricsResult?> FetchPinnedAsync(string rawTitle)
+    {
+        const string provider = "lrc.red";
+        if (!Pins.TryGetValue(Normalize(rawTitle), out string? isrc) || string.IsNullOrEmpty(isrc))
+        {
+            return null;
+        }
+
+        var (ttmlOk, ttml) = await GetTextAsync(provider, "https://lrc.red/s/" + isrc + ".ttml");
+        if (ttmlOk)
+        {
+            var lines = ParseTtml(ttml);
+            if (lines.Count > 0)
+            {
+                return new LyricsResult(true, false, "", lines, "lrc.red", "");
+            }
+        }
+        var (lrcOk, lrc) = await GetTextAsync(provider, "https://lrc.red/s/" + isrc + ".lrc");
+        if (lrcOk)
+        {
+            var lines = ParseLrc(lrc);
+            if (lines.Count > 0)
+            {
+                return new LyricsResult(true, false, "", lines, "lrc.red", "");
+            }
+        }
+        return null;
+    }
+
     private async Task<LyricsResult> FetchAsync(string rawTitle, string rawArtist, string title, string artist, long durationMs)
     {
         try
         {
+            var pinned = await FetchPinnedAsync(rawTitle);
+            if (pinned != null)
+            {
+                return WithEstimatedTiming(pinned, durationMs > 0 ? (int)(durationMs / 1000) : 0);
+            }
+
             var core = await FetchCoreAsync(rawTitle, rawArtist, title, artist, durationMs);
 
             // YouTube-style "Artist - Title" in the title field with a channel name
@@ -1353,32 +1440,40 @@ public class LyricsService
     private static bool TryParseTtmlTime(string value, out long timeMs)
     {
         timeMs = 0;
-        Match match = Regex.Match(value.Trim(), @"^(?:(\d+):)?([0-5]?\d):([0-5]?\d)(?:[.,](\d{1,3}))?$");
-        if (!match.Success)
+        string v = value.Trim().Replace(',', '.');
+        Match match = Regex.Match(v, @"^(?:(\d+):)?([0-5]?\d):([0-5]?\d)(?:[.](\d{1,3}))?$");
+        if (match.Success)
         {
-            return false;
+            int hours = match.Groups[1].Success ? int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) : 0;
+            int minutes = int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture);
+            int seconds = int.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture);
+            timeMs = ((hours * 60L + minutes) * 60L + seconds) * 1000L + ParseFraction(match.Groups[4].Value);
+            return true;
         }
 
-        int hours = match.Groups[1].Success ? int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) : 0;
-        int minutes = int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture);
-        int seconds = int.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture);
-        int millis = 0;
-        string fraction = match.Groups[4].Value;
-        if (fraction.Length == 1)
+        // Bare seconds ("23.605", "227"): lrc.red emits these alongside MM:SS.
+        Match bare = Regex.Match(v, @"^(\d+)(?:[.](\d+))?$");
+        if (bare.Success &&
+            long.TryParse(bare.Groups[1].Value, System.Globalization.NumberStyles.None, CultureInfo.InvariantCulture, out long bareSeconds))
         {
-            millis = int.Parse(fraction, CultureInfo.InvariantCulture) * 100;
+            timeMs = bareSeconds * 1000L + ParseFraction(bare.Groups[2].Value);
+            return true;
         }
-        else if (fraction.Length == 2)
-        {
-            millis = int.Parse(fraction, CultureInfo.InvariantCulture) * 10;
-        }
-        else if (fraction.Length == 3)
-        {
-            millis = int.Parse(fraction, CultureInfo.InvariantCulture);
-        }
+        return false;
+    }
 
-        timeMs = ((hours * 60L + minutes) * 60L + seconds) * 1000L + millis;
-        return true;
+    private static int ParseFraction(string fraction)
+    {
+        if (string.IsNullOrEmpty(fraction))
+        {
+            return 0;
+        }
+        if (fraction.Length > 3)
+        {
+            fraction = fraction[..3];
+        }
+        int parsed = int.Parse(fraction, CultureInfo.InvariantCulture);
+        return fraction.Length == 1 ? parsed * 100 : fraction.Length == 2 ? parsed * 10 : parsed;
     }
 
     private async Task<(bool Ok, JsonElement Element)> GetJsonAsync(string provider, string url)
