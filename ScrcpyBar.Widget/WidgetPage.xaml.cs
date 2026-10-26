@@ -162,6 +162,29 @@ namespace ScrcpyBar.Widget
             }
         }
 
+        /// <summary>
+        /// YouTube sometimes reports the video title as the artist (channel name
+        /// instead of a performer). Showing it twice is noise, so it is hidden.
+        /// </summary>
+        private static bool IsDuplicateArtist(string title, string artist)
+        {
+            string normalized = NormalizeName(artist);
+            return normalized.Length > 0 && normalized == NormalizeName(title);
+        }
+
+        private static string NormalizeName(string value)
+        {
+            var builder = new StringBuilder(value.Length);
+            foreach (char c in value.ToLowerInvariant().Replace('ё', 'е'))
+            {
+                if (char.IsLetterOrDigit(c))
+                {
+                    builder.Append(c);
+                }
+            }
+            return builder.ToString();
+        }
+
         private void ApplyTrackData(JsonObject json)
         {
             bool connected = json.GetNamedBoolean("connected", false);
@@ -190,7 +213,8 @@ namespace ScrcpyBar.Widget
             StatusText.Text = "Онлайн";
 
                 TrackTitleText.Text = string.IsNullOrWhiteSpace(title) ? "Нет трека" : title;
-                TrackArtistText.Text = string.IsNullOrWhiteSpace(artist) ? (hasTrack ? "" : "Запусти музыку на телефоне") : artist;
+                TrackArtistText.Text = string.IsNullOrWhiteSpace(artist) ? (hasTrack ? "" : "Запусти музыку на телефоне")
+                    : IsDuplicateArtist(title, artist) ? "" : artist;
                 TrackAppText.Text = appName;
 
                 bool? isLiked = null;

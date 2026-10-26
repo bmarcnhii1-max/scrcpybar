@@ -100,6 +100,15 @@ public class LyricsService
     {
         string rawTitle = (title ?? "").Trim();
         string rawArtist = (artist ?? "").Trim();
+
+        // Garbage metadata: the artist duplicates the title ("Ход конем" /
+        // "Ход конём" — a channel name or a duplicated field, not a performer).
+        // It must not poison name similarity, so it is dropped right away.
+        if (rawArtist.Length > 0 && Normalize(rawArtist) == Normalize(rawTitle))
+        {
+            rawArtist = "";
+        }
+
         string cleanTitle = Clean(rawTitle);
         string cleanArtist = Clean(rawArtist);
 

@@ -474,7 +474,11 @@ function applyData(d) {
     dot.className = 'dot on';
     $('statusText').innerText = 'онлайн';
     $('trackTitle').innerText = d.title || 'Нет трека';
-    $('trackArtist').innerText = d.artist || (d.hasTrack ? '' : 'Запусти музыку на телефоне');
+    const norm = s => (s || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]/gi, '');
+    const artist = d.artist || (d.hasTrack ? '' : 'Запусти музыку на телефоне');
+    // The phone sometimes duplicates the title into the artist (channel name
+    // instead of a performer) — showing it twice is just noise.
+    $('trackArtist').innerText = norm(artist) && norm(artist) === norm(d.title) ? '' : artist;
     $('trackApp').innerText = d.appName || d.packageName || '';
     isPlaying = !!d.isPlaying;
     $('artBox').classList.toggle('playing', isPlaying);
