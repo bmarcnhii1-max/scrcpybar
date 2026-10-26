@@ -217,6 +217,20 @@ public class LyricsService
         try
         {
             var core = await FetchCoreAsync(rawTitle, rawArtist, title, artist, durationMs);
+
+            // YouTube-style "Artist - Title" in the title field with a channel name
+            // as the artist ("Saint"): when the straight lookup yields nothing
+            // followable, retry with the split names before giving up.
+            if ((core.Lines.Count == 0) &&
+                TrySplitArtistTitle(rawTitle, rawArtist, out var splitTitle, out var splitArtist))
+            {
+                var retry = await FetchCoreAsync(splitTitle, splitArtist, Clean(splitTitle), Clean(splitArtist), durationMs);
+                if (retry.Found && retry.Lines.Count > 0)
+                {
+                    return WithEstimatedTiming(retry, durationMs > 0 ? (int)(durationMs / 1000) : 0);
+                }
+            }
+
             return WithEstimatedTiming(core, durationMs > 0 ? (int)(durationMs / 1000) : 0);
         }
         catch (Exception ex)
@@ -225,6 +239,35 @@ public class LyricsService
             _logger.LogWarning("Lyrics lookup failed for '{Artist}' - '{Title}': {Message}", rawArtist, rawTitle, ex.Message);
             return new LyricsResult(false, false, "", new List<LyricLine>(), "error");
         }
+    }
+
+    /// <summary>
+    /// Splits a YouTube-style "Artist - Title" carried in the title field when the
+    /// artist field holds a channel-style single token ("Saint"). Conservative:
+    /// multi-word artists and dashless titles never trigger it.
+    /// </summary>
+    private static bool TrySplitArtistTitle(string rawTitle, string rawArtist, out string title, out string artist)
+    {
+        title = "";
+        artist = "";
+        if (rawArtist.Contains(' ') || rawArtist.Contains('-'))
+        {
+            return false;
+        }
+        int dash = rawTitle.IndexOf(" - ", StringComparison.Ordinal);
+        if (dash <= 0)
+        {
+            return false;
+        }
+        string left = rawTitle[..dash].Trim();
+        string right = rawTitle[(dash + 3)..].Trim();
+        if (left.Length < 2 || right.Length < 2)
+        {
+            return false;
+        }
+        artist = left;
+        title = right;
+        return true;
     }
 
     private async Task<LyricsResult> FetchCoreAsync(string rawTitle, string rawArtist, string title, string artist, long durationMs)
@@ -387,9 +430,11 @@ public class LyricsService
     }
 
     /// <summary>
-    /// Picks the best search result. Versions of one song ("(Clean)", "(Paused)", "speed up")
+    /// Picks the best search result. Versions of one song ("(Clean)", "(Paused)", remixes)
     /// carry different lyrics, so besides synced lyrics and duration the raw title markers
     /// decide: a candidate with markers the query lacks is a different version, not a match.
+    /// Speed-only versions (speed up, slowed, nightcore) keep the same words and are
+    /// matched loosely on purpose.
     /// </summary>
     private LyricsResult? PickBestSearchResult(JsonElement searchResult, int durationSeconds, string rawTitle, string rawArtist, string title, string artist)
     {
@@ -469,14 +514,14 @@ public class LyricsService
                 {
                     if (!queryMarkers.Contains(marker))
                     {
-                        score -= IsContentMarker(marker) ? 600 : 250;
+                        score -= CandidateMarkerPenalty(marker);
                     }
                 }
                 foreach (var marker in queryMarkers)
                 {
                     if (!candidateMarkers.Contains(marker))
                     {
-                        score -= 150;
+                        score -= QueryMarkerPenalty(marker);
                     }
                 }
             }
@@ -589,6 +634,36 @@ public class LyricsService
         marker.Contains("explicit", StringComparison.Ordinal) ||
         marker.Contains("karaoke", StringComparison.Ordinal) ||
         marker.Contains("instrumental", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Remix markers: a different arrangement, often different words or timing.
+    /// Matched strictly like content markers (a remix is not the original).
+    /// </summary>
+    private static bool IsRemixMarker(string marker) =>
+        marker.Contains("remix", StringComparison.Ordinal) ||
+        marker.Contains("rmx", StringComparison.Ordinal) ||
+        marker.Contains("flip", StringComparison.Ordinal) ||
+        marker.Contains("bootleg", StringComparison.Ordinal) ||
+        marker.Contains("mashup", StringComparison.Ordinal) ||
+        marker.Contains("cover", StringComparison.Ordinal) ||
+        marker.Contains("rework", StringComparison.Ordinal) ||
+        marker.Contains("vip", StringComparison.Ordinal) ||
+        marker.Contains("edit", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Cost of a version marker the candidate has but the query lacks: a remix
+    /// served for an original request (or vice versa) is a different song.
+    /// Speed-only markers keep the generic cost — same words, just tempo.
+    /// </summary>
+    private static int CandidateMarkerPenalty(string marker) =>
+        IsContentMarker(marker) || IsRemixMarker(marker) ? 600 : 250;
+
+    /// <summary>
+    /// Cost of a query marker missing from the candidate: the exact remix is
+    /// strongly preferred, the original stays a usable fallback.
+    /// </summary>
+    private static int QueryMarkerPenalty(string marker) =>
+        IsRemixMarker(marker) ? 400 : 150;
 
     /// <summary>Display label for the matched version, e.g. "(Clean)". Empty for plain titles.</summary>
     private static string ExtractVersionLabel(JsonElement element)
@@ -931,14 +1006,14 @@ public class LyricsService
                 {
                     if (!queryMarkers.Contains(marker))
                     {
-                        score -= IsContentMarker(marker) ? 600 : 250;
+                        score -= CandidateMarkerPenalty(marker);
                     }
                 }
                 foreach (var marker in queryMarkers)
                 {
                     if (!hitMarkers.Contains(marker))
                     {
-                        score -= 150;
+                        score -= QueryMarkerPenalty(marker);
                     }
                 }
             }
