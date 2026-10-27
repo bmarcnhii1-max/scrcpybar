@@ -228,13 +228,75 @@ public class LyricsService
     };
 
     private Dictionary<string, string>? _pins;
+    private DateTime _pinsReadAt;
+    private Dictionary<string, string>? _bundled;
+
+    /// <summary>Bundled lyrics files (PinnedLyrics in the exe): exact gifted texts.</summary>
+    private Dictionary<string, string> Bundled
+    {
+        get
+        {
+            if (_bundled != null)
+            {
+                return _bundled;
+            }
+
+            var table = new Dictionary<string, string>(StringComparer.Ordinal);
+            try
+            {
+                var asm = typeof(LyricsService).Assembly;
+                foreach (string name in asm.GetManifestResourceNames())
+                {
+                    if (!name.StartsWith("pinned.", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+                    string file = name["pinned.".Length..];
+                    using var stream = asm.GetManifestResourceStream(name);
+                    if (stream == null)
+                    {
+                        continue;
+                    }
+                    using var reader = new StreamReader(stream, System.Text.Encoding.UTF8);
+                    table[Normalize(Path.GetFileNameWithoutExtension(file))] = reader.ReadToEnd();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Bundled lyrics load failed: {Message}", ex.Message);
+            }
+
+            _bundled = table;
+            return _bundled;
+        }
+    }
+
+    /// <summary>Bundled file first: no search, no network, the exact gifted text.</summary>
+    private LyricsResult? FetchBundled(string rawTitle)
+    {
+        if (!Bundled.TryGetValue(Normalize(rawTitle), out string? body) || string.IsNullOrWhiteSpace(body))
+        {
+            return null;
+        }
+
+        var lines = body.Contains("<tt", StringComparison.OrdinalIgnoreCase)
+            ? ParseTtml(body)
+            : ParseLrc(body);
+        if (lines.Count == 0)
+        {
+            return null;
+        }
+        return new LyricsResult(true, false, "", lines, "файл", "");
+    }
 
     /// <summary>Pinned ISRCs: builtins plus pins.json in the data dir.</summary>
     private Dictionary<string, string> Pins
     {
         get
         {
-            if (_pins != null)
+            string path = Path.Combine(AppPaths.DataDir, "pins.json");
+            DateTime written = File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
+            if (_pins != null && written <= _pinsReadAt)
             {
                 return _pins;
             }
@@ -242,7 +304,6 @@ public class LyricsService
             var table = new Dictionary<string, string>(BuiltinPins, StringComparer.Ordinal);
             try
             {
-                string path = Path.Combine(AppPaths.DataDir, "pins.json");
                 if (File.Exists(path))
                 {
                     using var doc = JsonDocument.Parse(File.ReadAllText(path));
@@ -268,6 +329,7 @@ public class LyricsService
             }
 
             _pins = table;
+            _pinsReadAt = DateTime.UtcNow;
             return _pins;
         }
     }
@@ -306,6 +368,12 @@ public class LyricsService
     {
         try
         {
+            var bundled = FetchBundled(rawTitle);
+            if (bundled != null)
+            {
+                return WithEstimatedTiming(bundled, durationMs > 0 ? (int)(durationMs / 1000) : 0);
+            }
+
             var pinned = await FetchPinnedAsync(rawTitle);
             if (pinned != null)
             {

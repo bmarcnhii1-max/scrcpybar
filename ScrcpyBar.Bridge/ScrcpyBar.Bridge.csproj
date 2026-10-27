@@ -27,6 +27,8 @@
 
   <ItemGroup>
     <EmbeddedResource Include="silence.wav" LogicalName="silence.wav" />
+    <!-- Bundled lyrics: exact gifted files, served offline before any search. -->
+    <EmbeddedResource Include="PinnedLyrics\*.ttml;PinnedLyrics\*.lrc" LogicalName="pinned.%(Filename)%(Extension)" />
     <None Update="silence.wav">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
