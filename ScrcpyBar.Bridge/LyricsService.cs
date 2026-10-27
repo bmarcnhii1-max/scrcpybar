@@ -117,6 +117,16 @@ public class LyricsService
             return new LyricsResult(false, false, "", new List<LyricLine>(), "none");
         }
 
+        // Bundled exact files win over everything, including the cache: whatever
+        // the search roulette stored earlier must never shadow the gifted text.
+        var bundled = FetchBundled(rawTitle);
+        if (bundled != null)
+        {
+            var timed = WithEstimatedTiming(bundled, durationMs > 0 ? (int)(durationMs / 1000) : 0);
+            _memory[BuildKey(rawArtist, rawTitle, durationMs)] = new CachedLyrics(timed, DateTime.UtcNow);
+            return timed;
+        }
+
         // The key uses the raw names and the duration: "(Clean)" uploads and
         // "speed up" versions carry different lyrics and must not share a cache entry.
         string key = BuildKey(rawArtist, rawTitle, durationMs);
@@ -1889,8 +1899,11 @@ public class LyricsService
 
     private static string BuildKey(string artist, string title, long durationMs)
     {
+        // v3: bundled/pinned tracks must not reuse search-roulette entries cached
+        // under the old scheme. Old files stay on disk orphaned (kilobytes) and
+        // are simply never read again.
         long seconds = durationMs > 0 ? durationMs / 1000L : 0;
-        string raw = $"{artist.ToLowerInvariant()}|{title.ToLowerInvariant()}|{seconds}";
+        string raw = $"v3|{artist.ToLowerInvariant()}|{title.ToLowerInvariant()}|{seconds}";
         // string.GetHashCode() is randomized per process on .NET, so a hash-based cache file
         // name would never match again after a restart. SHA-256 is stable across runs.
         using var sha = System.Security.Cryptography.SHA256.Create();
