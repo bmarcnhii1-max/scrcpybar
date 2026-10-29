@@ -143,6 +143,10 @@
                         Style="{StaticResource Subtle}"
                         Background="#15FFFFFF" Foreground="#9CA3AF" BorderThickness="1" BorderBrush="#20FFFFFF"
                         CornerRadius="9" Click="LyricsToggle_Click" ToolTipService.ToolTip="Слова песни"/>
+                <Button x:Name="LyricsRuBtn" Content="RU" FontSize="10" Padding="8,3"
+                        Style="{StaticResource Subtle}"
+                        Background="#15FFFFFF" Foreground="#9CA3AF" BorderThickness="1" BorderBrush="#20FFFFFF"
+                        CornerRadius="9" Click="LyricsRu_Click" ToolTipService.ToolTip="Перевод строк на русский"/>
                 <Border x:Name="StatusBadge" Background="#15FFFFFF" 
                         CornerRadius="10" Padding="8,2" BorderThickness="1" BorderBrush="#20FFFFFF">
                     <StackPanel Orientation="Horizontal" Spacing="5">

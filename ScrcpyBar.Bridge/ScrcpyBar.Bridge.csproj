@@ -25,6 +25,9 @@
     <EmbeddedResource Include="..\ScrcpyBar.Android\app\build\outputs\apk\debug\app-debug.apk" LogicalName="companion.apk" />
   </ItemGroup>
 
+  <ItemGroup Condition="Exists('..\ScrcpyBar.Widget\Assets\Square150x150Logo.scale-200.png')">
+    <EmbeddedResource Include="..\ScrcpyBar.Widget\Assets\Square150x150Logo.scale-200.png" LogicalName="applogo.png" />
+  </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="silence.wav" LogicalName="silence.wav" />
     <!-- Bundled lyrics: exact gifted files, served offline before any search. -->

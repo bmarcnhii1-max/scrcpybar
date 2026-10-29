@@ -1,5 +1,9 @@
 using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -183,7 +187,25 @@ app.MapGet("/api/cover", async (AdbService adb) =>
     return Results.File(track.AlbumArtPath, contentType);
 });
 
-app.MapGet("/api/lyrics", async (AdbService adb, LyricsService lyrics, bool? refresh, string? title, string? artist, long? durationMs) =>
+app.MapGet("/manifest.webmanifest", () => Results.Json(new
+{
+    name = "Scrcpy Bar",
+    short_name = "ScrcpyBar",
+    start_url = "/",
+    display = "standalone",
+    background_color = "#0a0e14",
+    theme_color = "#16a34a",
+    icons = new[]
+    {
+        new { src = "/icon-192.png", sizes = "192x192", type = "image/png" },
+        new { src = "/icon-512.png", sizes = "512x512", type = "image/png" },
+    },
+}));
+
+app.MapGet("/icon-192.png", () => IconOr404(192));
+app.MapGet("/icon-512.png", () => IconOr404(512));
+
+app.MapGet("/api/lyrics", async (AdbService adb, LyricsService lyrics, bool? refresh, string? title, string? artist, long? durationMs, string? lang) =>
 {
     // The widget sends the track it is showing: at a track switch the bridge's cached
     // "now playing" can still be the previous song, and unscoped lookups returned lyrics
@@ -204,7 +226,7 @@ app.MapGet("/api/lyrics", async (AdbService adb, LyricsService lyrics, bool? ref
         return Results.Ok(new { ok = false, reason = "no track", lines = Array.Empty<object>() });
     }
 
-    var result = await lyrics.GetAsync(track.Title, track.Artist, track.DurationMs, refresh == true);
+    var result = await lyrics.GetAsync(track.Title, track.Artist, track.DurationMs, refresh == true, lang);
     return Results.Ok(new
     {
         ok = result.Found,
@@ -258,12 +280,62 @@ app.MapGet("/", () => Results.Content(GetHtmlDashboard(), "text/html; charset=ut
 return app;
         }
 
-static string GetHtmlDashboard() => """
+    private static readonly Dictionary<int, byte[]> _icons = new();
+
+    /// <summary>App icons for the PWA manifest, resized once from the embedded logo.</summary>
+    private static IResult IconOr404(int size)
+    {
+        lock (_icons)
+        {
+            if (!_icons.TryGetValue(size, out var png))
+            {
+                png = RenderIcon(size);
+                if (png == null)
+                {
+                    return Results.NotFound();
+                }
+                _icons[size] = png;
+            }
+            return Results.File(png, "image/png");
+        }
+    }
+
+    private static byte[]? RenderIcon(int size)
+    {
+        try
+        {
+            using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("applogo.png");
+            if (stream == null)
+            {
+                return null;
+            }
+            using var src = new Bitmap(stream);
+            using var dst = new Bitmap(size, size);
+            using var graphics = Graphics.FromImage(dst);
+            graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            graphics.DrawImage(src, 0, 0, size, size);
+            using var output = new MemoryStream();
+            dst.Save(output, ImageFormat.Png);
+            return output.ToArray();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    static string GetHtmlDashboard() => """
 <!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0a0e14">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%2316a34a' d='M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z'/%3E%3C/svg%3E">
 <title>Scrcpy Bar</title>
 <style>
 :root { color-scheme: dark; --bg: #0a0e14; --card: rgba(20, 26, 38, 0.82); --line: rgba(255, 255, 255, 0.09); --green: #16a34a; --green-hi: #4ade80; --txt: #f3f4f6; --mut: #9ca3af; }
@@ -302,9 +374,9 @@ body { background: var(--bg); background-image: radial-gradient(120px 120px at 1
 .like.liked { color: #f87171; border-color: rgba(248, 113, 113, 0.4); }
 .like.liked svg { fill: #f87171; }
 .bot { display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--mut); border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 8px; }
-.vol { display: flex; align-items: center; gap: 4px; }
-.vbtn { background: rgba(255, 255, 255, 0.06); border: none; border-radius: 5px; color: var(--mut); min-width: 20px; height: 20px; cursor: pointer; font-size: 12px; font-weight: 700; }
-.vbtn:hover { background: rgba(255, 255, 255, 0.15); color: #fff; }
+.vol { display: flex; align-items: center; gap: 6px; flex: 1; margin-left: 8px; }
+.vol input[type=range] { flex: 1; accent-color: var(--green); height: 14px; cursor: pointer; }
+.vol span { min-width: 18px; text-align: right; }
 .lyr-wrap { border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .lyr-head { display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: var(--mut); }
 .lyr-box { max-height: 180px; overflow-y: auto; font-size: 12px; line-height: 1.7; scrollbar-width: thin; overscroll-behavior: contain; }
@@ -313,6 +385,7 @@ body { background: var(--bg); background-image: radial-gradient(120px 120px at 1
 .lyr-plain { color: var(--mut); white-space: pre-wrap; }
 .lyr-empty { color: var(--mut); font-size: 11px; }
 .lyr-jump { background: rgba(22, 163, 74, 0.25); border: 1px solid rgba(74, 222, 128, 0.4); border-radius: 99px; color: #fff; font-size: 10px; padding: 2px 10px; cursor: pointer; display: none; }
+.lyr-ru { background: rgba(255, 255, 255, 0.06); border: 1px solid var(--line); border-radius: 99px; color: var(--mut); font-size: 10px; padding: 2px 10px; cursor: pointer; display: inline-block; }
 .ghost-off { opacity: 0.45; }
 @media (max-width: 420px) {
   body { padding: 8px; align-items: flex-start; }
@@ -343,15 +416,24 @@ body { background: var(--bg); background-image: radial-gradient(120px 120px at 1
 <button class="btn" id="lyrBtn" onclick="toggleLyrics()" title="Текст песни"><svg viewBox="0 0 24 24"><path d="M4 5h16v2H4zm0 4h16v2H4zm0 4h10v2H4zm0 4h10v2H4z"/></svg></button>
 </div>
 <div class="lyr-wrap" id="lyrWrap">
-<div class="lyr-head"><span>Текст песни</span><span><span id="lyrSrc"></span> <button class="lyr-jump" id="lyrJump" onclick="jumpToCurrent()">▼ к строке</button></span></div>
+<div class="lyr-head"><span>Текст песни</span><span><span id="lyrSrc"></span> <button class="lyr-ru" id="lyrRuBtn" onclick="toggleRuLyric()">RU</button> <button class="lyr-jump" id="lyrJump" onclick="jumpToCurrent()">▼ к строке</button></span></div>
 <div class="lyr-box" id="lyrBox"><div class="lyr-empty">загрузка...</div></div>
 </div>
-<div class="bot"><span>USB &middot; ADB &middot; <span id="dashVer"></span></span><div class="vol"><button class="vbtn" onclick="control('vol-down')">-</button><span id="volLevel">-</span><button class="vbtn" onclick="control('vol-up')">+</button></div></div>
+<div class="bot"><span>USB &middot; ADB &middot; <span id="dashVer"></span></span><div class="vol"><input type="range" id="volSlider" min="0" max="15" step="1" value="0" title="Громкость"><span id="volLevel">–</span></div></div>
 </div>
 <script>
 let isPlaying = false, isLiked = null, posMs = 0, durMs = 0, stampMs = 0, coverKey = '';
-let lyrLines = [], lyrKey = '', lyrIdx = -1, lyrFollow = true, lyrAutoTarget = -1, lyrLastTop = -1, lyrAbort = null, lyrLoadingAt = 0;
+let lyrLines = [], lyrKey = '', lyrIdx = -1, lyrFollow = true, lyrAutoTarget = -1, lyrLastTop = -1, lyrAbort = null, lyrLoadingAt = 0, lyrRu = false;
+try { if (localStorage.getItem('lyrRu') === '1') lyrRu = true; } catch (e) {}
+function toggleRuLyric() {
+    lyrRu = !lyrRu;
+    try { localStorage.setItem('lyrRu', lyrRu ? '1' : '0'); } catch (e) {}
+    $('lyrRuBtn').style.opacity = lyrRu ? '1' : '0.45';
+    lyrKey = '';
+    loadLyrics();
+}
 try { if (localStorage.getItem('lyr') === '0') { document.getElementById('lyrWrap').style.display = 'none'; document.getElementById('lyrBtn').classList.add('ghost-off'); } } catch (e) {}
+try { if (localStorage.getItem('lyrRu') === '1') document.getElementById('lyrRuBtn').style.opacity = '1'; else document.getElementById('lyrRuBtn').style.opacity = '0.45'; } catch (e) {}
 function toggleLyrics() {
     const w = document.getElementById('lyrWrap');
     const hidden = w.style.display === 'none';
@@ -404,7 +486,7 @@ async function loadLyrics() {
     lyrAbort = new AbortController();
     lyrLoadingAt = Date.now();
     try {
-        const res = await fetch('/api/lyrics', { signal: lyrAbort.signal });
+        const res = await fetch('/api/lyrics' + (lyrRu ? '?lang=ru' : ''), { signal: lyrAbort.signal });
         if (!res.ok) throw 0;
         const d = await res.json();
         $('lyrSrc').innerText = d.source ? '· ' + d.source : '';
@@ -483,7 +565,15 @@ function applyData(d) {
     isPlaying = !!d.isPlaying;
     $('artBox').classList.toggle('playing', isPlaying);
     $('playIcon').innerHTML = isPlaying ? '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>' : '<path d="M8 5v14l11-7z"/>';
-    if (d.volumeCurrent !== undefined) $('volLevel').innerText = d.volumeCurrent;
+    if (d.volumeCurrent !== undefined) {
+        $('volLevel').innerText = d.volumeCurrent;
+        const sl = $('volSlider');
+        if (document.activeElement !== sl) {
+            const v = +d.volumeCurrent || 0;
+            if (v > +sl.max) sl.max = v;
+            sl.value = v;
+        }
+    }
     posMs = (d.positionMs ?? d.PositionMs) || 0;
     durMs = (d.durationMs ?? d.DurationMs) || 0;
     stampMs = Date.now();
@@ -552,6 +642,24 @@ $('progBar').addEventListener('click', async e => {
         const res = await fetch('/api/seek-position?positionMs=' + target + '&durationMs=' + durMs, { method: 'POST' });
         if (res.ok) { const d = await res.json(); if (d.track) applyData(d.track); }
     } catch (err) { /* offline */ }
+});
+let volTimer = 0;
+$('volSlider').addEventListener('input', e => {
+    $('volLevel').innerText = e.target.value;
+    clearTimeout(volTimer);
+    volTimer = setTimeout(async () => {
+        try { await fetch('/api/volume?level=' + e.target.value, { method: 'POST' }); } catch (err) { /* offline */ }
+    }, 300);
+});
+document.addEventListener('keydown', e => {
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    if (e.code === 'Space') { e.preventDefault(); control('play-pause'); }
+    else if (e.code === 'ArrowRight') control('fast-forward');
+    else if (e.code === 'ArrowLeft') control('rewind');
+    else if (e.code === 'ArrowUp') { e.preventDefault(); control('vol-up'); }
+    else if (e.code === 'ArrowDown') { e.preventDefault(); control('vol-down'); }
+    else if (e.code === 'KeyN') control('next');
+    else if (e.code === 'KeyP') control('prev');
 });
 setInterval(updateTrack, 2000);
 setInterval(paintProg, 250);

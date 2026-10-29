@@ -648,9 +648,34 @@ public class AdbService
         return element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.True;
     }
 
+    /// <summary>
+    /// While paused the artwork cannot change, so a cached file for the same
+    /// track is reused instead of downloading it again every few seconds.
+    /// </summary>
+    private string? ReuseCachedArtwork(TrackInfo fresh)
+    {
+        var cached = _cachedInfo;
+        if (cached == null || cached.HasTrack != fresh.HasTrack || fresh.IsPlaying)
+        {
+            return null;
+        }
+        if (cached.Title != fresh.Title || cached.Artist != fresh.Artist)
+        {
+            return null;
+        }
+        if (string.IsNullOrEmpty(cached.AlbumArtPath) || !File.Exists(cached.AlbumArtPath))
+        {
+            return null;
+        }
+        return cached.AlbumArtPath;
+    }
+
     public async Task<TrackInfo> GetNowPlayingAsync(bool forceRefresh = false)
     {
-        if (!forceRefresh && _cachedInfo != null && (DateTime.UtcNow - _lastCacheTime).TotalMilliseconds < 800)
+        // Paused playback barely changes: stretch the cache to spare the phone
+        // (ADB round-trips, dumpsys fallback) and the battery.
+        long ttlMs = !forceRefresh && _cachedInfo != null && _cachedInfo.HasTrack && !_cachedInfo.IsPlaying ? 4000 : 800;
+        if (!forceRefresh && _cachedInfo != null && (DateTime.UtcNow - _lastCacheTime).TotalMilliseconds < ttlMs)
         {
             return _cachedInfo;
         }
@@ -658,7 +683,8 @@ public class AdbService
         await _lock.WaitAsync();
         try
         {
-            if (!forceRefresh && _cachedInfo != null && (DateTime.UtcNow - _lastCacheTime).TotalMilliseconds < 800)
+            ttlMs = !forceRefresh && _cachedInfo != null && _cachedInfo.HasTrack && !_cachedInfo.IsPlaying ? 4000 : 800;
+            if (!forceRefresh && _cachedInfo != null && (DateTime.UtcNow - _lastCacheTime).TotalMilliseconds < ttlMs)
             {
                 return _cachedInfo;
             }
@@ -687,7 +713,8 @@ public class AdbService
             if (companionTrack != null)
             {
                 var (companionVolume, companionVolumeMax) = await GetVolumeAsync();
-                string companionArtwork = await GetCompanionArtworkPathAsync(companionTrack);
+                string companionArtwork = ReuseCachedArtwork(companionTrack)
+                    ?? await GetCompanionArtworkPathAsync(companionTrack);
                 _cachedInfo = companionTrack with
                 {
                     VolumeCurrent = companionVolume,

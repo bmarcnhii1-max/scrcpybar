@@ -96,17 +96,14 @@ public class LyricsService
     /// Returns the lyrics for a track. The result is cached per artist/title, so repeated calls
     /// for the same song are free.
     /// </summary>
-    public async Task<LyricsResult> GetAsync(string title, string artist, long durationMs, bool forceRefresh = false)
+    public async Task<LyricsResult> GetAsync(string title, string artist, long durationMs, bool forceRefresh = false, string? lang = null)
     {
-        string rawTitle = (title ?? "").Trim();
-        string rawArtist = (artist ?? "").Trim();
+        var (rawTitle, rawArtist) = CleanNames(title, artist);
 
-        // Garbage metadata: the artist duplicates the title ("Ход конем" /
-        // "Ход конём" — a channel name or a duplicated field, not a performer).
-        // It must not poison name similarity, so it is dropped right away.
-        if (rawArtist.Length > 0 && Normalize(rawArtist) == Normalize(rawTitle))
+        // Russian translation rides on top of the resolved lyrics.
+        if (string.Equals(lang, "ru", StringComparison.OrdinalIgnoreCase))
         {
-            rawArtist = "";
+            return await GetTranslatedAsync(rawTitle, rawArtist, durationMs, forceRefresh);
         }
 
         string cleanTitle = Clean(rawTitle);
@@ -228,6 +225,262 @@ public class LyricsService
         finally
         {
             _lock.Release();
+        }
+    }
+
+    /// <summary>Trims names and drops an artist that duplicates the title.</summary>
+    private static (string RawTitle, string RawArtist) CleanNames(string? title, string? artist)
+    {
+        string rawTitle = (title ?? "").Trim();
+        string rawArtist = (artist ?? "").Trim();
+
+        // Garbage metadata: the artist duplicates the title ("Ход конем" /
+        // "Ход конём" — a channel name or a duplicated field, not a performer).
+        // It must not poison name similarity, so it is dropped right away.
+        if (rawArtist.Length > 0 && Normalize(rawArtist) == Normalize(rawTitle))
+        {
+            rawArtist = "";
+        }
+
+        return (rawTitle, rawArtist);
+    }
+
+    /// <summary>
+    /// Russian translation of resolved lyrics, cached separately. Lines keep their
+    /// timings; word timings are dropped so the fill degrades to linear.
+    /// </summary>
+    private async Task<LyricsResult> GetTranslatedAsync(string rawTitle, string rawArtist, long durationMs, bool forceRefresh)
+    {
+        var baseResult = await GetAsync(rawTitle, rawArtist, durationMs, forceRefresh);
+        if (!baseResult.Found || baseResult.Lines.Count == 0 || LooksRussian(baseResult.Lines))
+        {
+            return baseResult;
+        }
+
+        string tkey = "ru|" + BuildKey(rawArtist, rawTitle, durationMs);
+        if (!forceRefresh && _memory.TryGetValue(tkey, out var cached) && cached.Result.Found)
+        {
+            return cached.Result;
+        }
+
+        string tpath = CachePath(tkey);
+        if (!forceRefresh && File.Exists(tpath))
+        {
+            try
+            {
+                var disk = ParseCached(await File.ReadAllTextAsync(tpath), tkey);
+                if (disk.Found)
+                {
+                    _memory[tkey] = new CachedLyrics(disk, DateTime.UtcNow);
+                    return disk;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Lyrics cache read failed: {Message}", ex.Message);
+            }
+        }
+
+        var translated = await TranslateLinesAsync(baseResult.Lines.Select(line => line.Text).ToList());
+        if (translated == null)
+        {
+            return baseResult;
+        }
+
+        var result = baseResult with
+        {
+            Plain = string.Join("\n", translated),
+            Lines = baseResult.Lines.Select((line, i) => line with
+            {
+                Text = translated[i],
+                Words = new List<LyricWord>()
+            }).ToList()
+        };
+        _memory[tkey] = new CachedLyrics(result, DateTime.UtcNow);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(tpath)!);
+            await File.WriteAllTextAsync(tpath, Serialize(result));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Lyrics cache write failed: {Message}", ex.Message);
+        }
+        return result;
+    }
+
+    private static bool LooksRussian(List<LyricLine> lines)
+    {
+        long cyrillic = 0, letters = 0;
+        foreach (var line in lines)
+        {
+            foreach (char c in line.Text)
+            {
+                if (char.IsLetter(c))
+                {
+                    letters++;
+                    if (c >= 'Ѐ' && c <= 'џ' || c == 'Ё' || c == 'ё')
+                    {
+                        cyrillic++;
+                    }
+                }
+            }
+        }
+        return letters > 0 && cyrillic * 4 >= letters;
+    }
+
+    /// <summary>Machine translation via the unofficial Google endpoint, batched. Null on failure.</summary>
+    /// <summary>Machine translation, batched. Google first, MyMemory as fallback. Null on failure.</summary>
+    private async Task<List<string>?> TranslateLinesAsync(List<string> texts)
+    {
+        var viaGoogle = await TranslateGoogleAsync(texts);
+        if (viaGoogle != null)
+        {
+            return viaGoogle;
+        }
+        return await TranslateMyMemoryAsync(texts);
+    }
+
+    private async Task<List<string>?> TranslateGoogleAsync(List<string> texts)
+    {
+        var translated = new List<string>();
+        foreach (string chunk in ChunkLines(texts, 3500))
+        {
+            int expected = chunk.Split('\n').Length;
+            string url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ru&dt=t&q=" +
+                Uri.EscapeDataString(chunk);
+            string? blob = await TranslateFetchAsync(url, body =>
+            {
+                using var doc = JsonDocument.Parse(body);
+                var sb = new StringBuilder();
+                foreach (var s in doc.RootElement[0].EnumerateArray())
+                {
+                    if (s.ValueKind == JsonValueKind.Array && s.GetArrayLength() > 0 &&
+                        s[0].ValueKind == JsonValueKind.String)
+                    {
+                        sb.Append(s[0].GetString());
+                    }
+                }
+                return sb.ToString();
+            });
+            if (blob == null)
+            {
+                return null;
+            }
+            var parts = blob.Split('\n').Select(p => p.Trim()).ToList();
+            if (parts.Count != expected)
+            {
+                return null;
+            }
+            translated.AddRange(parts);
+        }
+        return translated.Count == texts.Count ? translated : null;
+    }
+
+    private async Task<List<string>?> TranslateMyMemoryAsync(List<string> texts)
+    {
+        // MyMemory needs an explicit source language and ~450 chars per request:
+        // English-only fallback for when Google throttles us.
+        if (texts.Any(t => !IsMostlyAscii(t)))
+        {
+            return null;
+        }
+        var translated = new List<string>();
+        foreach (string chunk in ChunkLines(texts, 450))
+        {
+            int expected = chunk.Split('\n').Length;
+            string url = "https://api.mymemory.translated.net/get?q=" +
+                Uri.EscapeDataString(chunk) + "&langpair=en|ru";
+            string? blob = await TranslateFetchAsync(url, body =>
+            {
+                using var doc = JsonDocument.Parse(body);
+                if (!doc.RootElement.TryGetProperty("responseData", out var data) ||
+                    data.ValueKind != JsonValueKind.Object ||
+                    !data.TryGetProperty("translatedText", out var text) ||
+                    text.ValueKind != JsonValueKind.String)
+                {
+                    return null;
+                }
+                return text.GetString() ?? "";
+            });
+            if (string.IsNullOrWhiteSpace(blob) || blob.Contains("QUERY LENGTH LIMIT"))
+            {
+                return null;
+            }
+            // MyMemory HTML-encodes newlines as &#10; — decode before splitting.
+            var parts = System.Net.WebUtility.HtmlDecode(blob).Split('\n').Select(p => p.Trim()).ToList();
+            if (parts.Count != expected)
+            {
+                return null;
+            }
+            translated.AddRange(parts);
+        }
+        return translated.Count == texts.Count ? translated : null;
+    }
+
+    private static List<string> ChunkLines(List<string> texts, int maxChars)
+    {
+        var chunks = new List<string>();
+        var current = new StringBuilder();
+        foreach (string text in texts)
+        {
+            if (current.Length + text.Length + 1 > maxChars)
+            {
+                chunks.Add(current.ToString());
+                current.Clear();
+            }
+            if (current.Length > 0)
+            {
+                current.Append('\n');
+            }
+            current.Append(text);
+        }
+        if (current.Length > 0)
+        {
+            chunks.Add(current.ToString());
+        }
+        return chunks;
+    }
+
+    private static bool IsMostlyAscii(string text)
+    {
+        int ascii = 0, letters = 0;
+        foreach (char c in text)
+        {
+            if (char.IsLetter(c))
+            {
+                letters++;
+                if (c < 128)
+                {
+                    ascii++;
+                }
+            }
+        }
+        return letters == 0 || ascii * 10 >= letters * 7;
+    }
+
+    private async Task<string?> TranslateFetchAsync(string url, Func<string, string?> parse)
+    {
+        try
+        {
+            using var response = await _http.GetAsync(url);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+            string body = await response.Content.ReadAsStringAsync();
+            try
+            {
+                return parse(body);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+        catch
+        {
+            return null;
         }
     }
 

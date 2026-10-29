@@ -89,6 +89,38 @@ namespace ScrcpyBar.Widget
         private void OnCompositionRendering(object sender, object e)
         {
             UpdateKaraoke();
+            UpdateProgressSmooth();
+        }
+
+        /// <summary>
+        /// Advances the progress bar and thumb on every frame so motion stays
+        /// smooth between the 1-second track polls. Reads only, never touches
+        /// the cached position state (the next poll re-anchors it).
+        /// </summary>
+        private void UpdateProgressSmooth()
+        {
+            if (_durationSeconds <= 0 || _isSeeking || !_isPlaying)
+            {
+                return;
+            }
+
+            double elapsed = (DateTime.UtcNow - _positionStampUtc).TotalSeconds;
+            double shown = Math.Max(0, Math.Min(_durationSeconds, _positionMs / 1000.0 + elapsed));
+            if (Math.Abs(shown - _positionSeconds) < 0.05)
+            {
+                return;
+            }
+
+            _positionSeconds = shown;
+            if (TrackProgress != null)
+            {
+                TrackProgress.Value = shown;
+            }
+            if (PositionText != null)
+            {
+                PositionText.Text = FormatTime(shown);
+            }
+            UpdateSeekThumb();
         }
 
         protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -157,9 +189,14 @@ namespace ScrcpyBar.Widget
         {
             using (var response = await client.GetAsync(new Uri(url)))
             {
-                byte[] bytes = await response.Content.ReadAsByteArrayAsync();
-                return new UTF8Encoding(false).GetString(bytes);
+                return await GetUtf8StringAsync(response);
             }
+        }
+
+        private static async Task<string> GetUtf8StringAsync(HttpResponseMessage response)
+        {
+            byte[] bytes = await response.Content.ReadAsByteArrayAsync();
+            return new UTF8Encoding(false).GetString(bytes);
         }
 
         /// <summary>
@@ -335,6 +372,30 @@ namespace ScrcpyBar.Widget
 
         // ---------------------------------------------------------------- karaoke lyrics
 
+        private bool _lyricsRu;
+
+        private void LyricsRu_Click(object sender, RoutedEventArgs e)
+        {
+            _lyricsRu = !_lyricsRu;
+            LyricsRuBtn.Background = _lyricsRu
+                ? new SolidColorBrush(Color.FromArgb(255, 16, 124, 65))
+                : new SolidColorBrush(Color.FromArgb(255, 21, 255, 255));
+            LyricsRuBtn.Foreground = _lyricsRu
+                ? new SolidColorBrush(Color.FromArgb(255, 255, 255, 255))
+                : new SolidColorBrush(Color.FromArgb(255, 156, 163, 175));
+
+            if (!_lyricsEnabled)
+            {
+                return;
+            }
+
+            // Same track, different language: drop the lines so the fetch below
+            // cannot be mistaken for a duplicate request.
+            _lyricsKey = "";
+            TrackLyricsKey(!string.IsNullOrWhiteSpace(_currentTitle), _currentTitle, _currentArtist);
+            UpdateKaraoke();
+        }
+
         private void LyricsToggle_Click(object sender, RoutedEventArgs e)
         {
             _lyricsEnabled = !_lyricsEnabled;
@@ -408,6 +469,10 @@ namespace ScrcpyBar.Widget
                 // Scoped to the exact track the widget shows: right after a track switch the
                 // bridge's "now playing" can still be the previous song.
                 var query = new System.Text.StringBuilder("?t=").Append(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                if (_lyricsRu)
+                {
+                    query.Append("&lang=ru");
+                }
                 if (requestedKey.Length > 0)
                 {
                     query.Append("&title=").Append(Uri.EscapeDataString(_currentTitle));
@@ -605,16 +670,22 @@ namespace ScrcpyBar.Widget
                 position += (DateTime.UtcNow - _positionStampUtc).TotalMilliseconds;
             }
 
+            // Lines are sorted by time, so binary search beats the linear scan
+            // that ran on every vsync frame.
             int index = -1;
-            for (int i = 0; i < _lyrics.Count; i++)
+            int lo = 0;
+            int hi = _lyrics.Count - 1;
+            while (lo <= hi)
             {
-                if (_lyrics[i].TimeMs <= position)
+                int mid = lo + ((hi - lo) >> 1);
+                if (_lyrics[mid].TimeMs <= position)
                 {
-                    index = i;
+                    index = mid;
+                    lo = mid + 1;
                 }
                 else
                 {
-                    break;
+                    hi = mid - 1;
                 }
             }
 
@@ -874,8 +945,9 @@ namespace ScrcpyBar.Widget
                     }
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                SeekLog.Write($"jump to line {index} failed: {ex.Message}");
             }
         }
 
@@ -1123,7 +1195,7 @@ namespace ScrcpyBar.Widget
                     new Uri($"{BaseApi}/api/like?value={want.ToString().ToLowerInvariant()}"), content);
                 if (response.IsSuccessStatusCode)
                 {
-                    var body = await response.Content.ReadAsStringAsync();
+                    var body = await GetUtf8StringAsync(response);
                     if (JsonObject.TryParse(body, out JsonObject json) &&
                         json.TryGetValue("track", out var trackValue) &&
                         trackValue.ValueType == JsonValueType.Object)
@@ -1136,7 +1208,10 @@ namespace ScrcpyBar.Widget
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                SeekLog.Write($"like failed: {ex.Message}");
+            }
         }
 
         private void UpdateLikeButton()
@@ -1175,14 +1250,17 @@ namespace ScrcpyBar.Widget
                 var response = await _http.PostAsync(new Uri($"{BaseApi}/api/{endpoint}"), content);
                 if (response.IsSuccessStatusCode)
                 {
-                    var body = await response.Content.ReadAsStringAsync();
+                    var body = await GetUtf8StringAsync(response);
                     if (JsonObject.TryParse(body, out JsonObject json))
                     {
                         ApplyTrackData(json);
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                SeekLog.Write($"command {endpoint} failed: {ex.Message}");
+            }
         }
     }
 }
