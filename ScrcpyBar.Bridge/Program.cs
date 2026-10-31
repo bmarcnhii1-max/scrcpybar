@@ -78,8 +78,11 @@ namespace ScrcpyBar.Bridge
             builder.Logging.AddProvider(new FileLoggerProvider());
 
 
-// Configure port: 39281 (dedicated port for ScrcpyBar)
-builder.WebHost.UseUrls("http://127.0.0.1:39281");
+            // Configure port: 39281 (dedicated port for ScrcpyBar).
+            // Default is localhost-only. Pass --lan to listen on all interfaces
+            // so phones/tablets on the same Wi-Fi can open the dashboard.
+            var lanMode = args.Any(a => a.Equals("--lan", StringComparison.OrdinalIgnoreCase));
+            builder.WebHost.UseUrls(lanMode ? "http://0.0.0.0:39281" : "http://127.0.0.1:39281");
 
 builder.Services.AddSingleton<AdbService>();
 builder.Services.AddSingleton<LyricsService>();
@@ -95,7 +98,27 @@ builder.Services.AddCors(options =>
     });
 });
 
-var app = builder.Build();
+            var app = builder.Build();
+
+            if (lanMode)
+            {
+                app.Logger.LogInformation("LAN mode: dashboard available at:");
+                app.Logger.LogInformation("  http://127.0.0.1:39281  (this PC)");
+                try
+                {
+                    foreach (var ip in System.Net.Dns.GetHostEntry(System.Net.Dns.GetHostName()).AddressList)
+                    {
+                        if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                        {
+                            app.Logger.LogInformation("  http://" + ip + ":39281");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    app.Logger.LogWarning("Could not list LAN addresses: " + ex.Message);
+                }
+            }
 
 app.UseCors();
 app.UseStaticFiles();
