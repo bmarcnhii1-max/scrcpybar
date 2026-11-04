@@ -2,8 +2,22 @@
 rem Launch ScrcpyBar Bridge in LAN mode: dashboard visible on the local network.
 chcp 65001 > nul
 title ScrcpyBar Bridge (LAN)
+
+set "EXE=%~dp0build\ScrcpyBar.Bridge.exe"
+if not exist "%EXE%" set "EXE=%~dp0ScrcpyBar.Bridge.exe"
+if not exist "%EXE%" set "EXE=D:\scrcpybar-public\build\ScrcpyBar.Bridge.exe"
+if not exist "%EXE%" (
+  echo [!] ScrcpyBar.Bridge.exe not found.
+  echo     Put this .bat next to the "build" folder from the repo,
+  echo     or drop ScrcpyBar.Bridge.exe next to this .bat.
+  echo     Repo: D:\scrcpybar-public
+  pause
+  exit /b 1
+)
+
 echo ===================================================
 echo   ScrcpyBar Bridge - LAN mode
+echo   Using: %EXE%
 echo   This PC:      http://127.0.0.1:39281
 echo   Phone/tablet: http://YOUR-PC-IP:39281  (same Wi-Fi)
 echo   Your IPs are also listed in %%LOCALAPPDATA%%\ScrcpyBar\bridge.log
@@ -19,5 +33,5 @@ if errorlevel 1 (
   echo [ok] Firewall rule present.
 )
 echo [*] Starting bridge (this window must stay open)...
-"%~dp0build\ScrcpyBar.Bridge.exe" --lan --console
+"%EXE%" --lan --console
 pause
